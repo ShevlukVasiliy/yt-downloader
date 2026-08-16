@@ -29,6 +29,17 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # tauri-build validates that bundle.resources paths exist even for a plain
+      # `cargo check`/`test` — placeholders are enough here since CI never runs
+      # the actual downloaded binaries, just compiles against their presence.
+      - name: Placeholder bundled binaries
+        run: |
+          mkdir -p src-tauri/binaries
+          for f in yt-dlp ffmpeg ffprobe; do
+            printf '#!/bin/sh\nexit 1\n' > "src-tauri/binaries/$f"
+            chmod +x "src-tauri/binaries/$f"
+          done
+
       - name: Type-check frontend
         run: npx tsc --noEmit
 
