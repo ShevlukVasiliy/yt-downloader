@@ -56,15 +56,34 @@ jobs:
           ./ffmpeg -version | head -1
           ./ffprobe -version | head -1
 
-      - uses: tauri-apps/tauri-action@v0
+      # tauri-apps/tauri-action's macOS bundle_dmg.sh is known to fail intermittently
+      # (AppleScript/Finder flakiness) even on a clean runner — retry the build a
+      # couple of times before giving up, then upload the artifacts ourselves.
+      - name: Build app + dmg (retrying flaky dmg bundler)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npm run tauri build; then
+              exit 0
+            fi
+            echo "Build attempt $attempt failed, retrying..."
+            rm -rf src-tauri/target/release/bundle/dmg
+            sleep 5
+          done
+          echo "Build failed after 3 attempts"
+          exit 1
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "YT Downloader ${{ github.ref_name }}"
+          body: "Скачайте установщик для вашей ОС: `.dmg` (macOS, Apple Silicon), `.msi`/`.exe` (Windows), `.deb`/`.AppImage` (Linux)."
+          draft: true
+          prerelease: false
+          files: src-tauri/target/release/bundle/dmg/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "YT Downloader ${{ github.ref_name }}"
-          releaseBody: "Скачайте установщик для вашей ОС: `.dmg` (macOS, Apple Silicon), `.msi`/`.exe` (Windows), `.deb`/`.AppImage` (Linux)."
-          releaseDraft: true
-          prerelease: false
 
   release-windows:
     permissions:
