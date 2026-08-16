@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  release-macos:
+    permissions:
+      contents: write
+    runs-on: macos-14 # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      # yt-dlp/ffmpeg/ffprobe aren't committed to the repo (large, platform-specific
+      # binaries) — fetch fresh static builds here and bundle them as Tauri
+      # resources, exactly like a local `tauri build` expects in src-tauri/binaries/.
+      - name: Prepare bundled yt-dlp/ffmpeg/ffprobe
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          cd src-tauri/binaries
+
+          curl -fL --retry 3 -o yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
+          curl -fL --retry 3 -o ffmpeg.zip "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
+          curl -fL --retry 3 -o ffprobe.zip "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"
+          unzip -o ffmpeg.zip -x '*.txt' -d .
+          unzip -o ffprobe.zip -x '*.txt' -d .
+          rm -f ffmpeg.zip ffprobe.zip
+
+          chmod +x yt-dlp ffmpeg ffprobe
+          codesign --force -s - yt-dlp ffmpeg ffprobe
+
+          ./yt-dlp --version
+          ./ffmpeg -version | head -1
+          ./ffprobe -version | head -1
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "YT Downloader ${{ github.ref_name }}"
+          releaseBody: "Скачайте `.dmg` для вашего Mac (Apple Silicon)."
+          releaseDraft: true
+          prerelease: false

@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Bundled sidecar binaries — large, platform-specific, fetched at build time
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+*.local
+
+# Logs
+*.log
+npm-debug.log*
