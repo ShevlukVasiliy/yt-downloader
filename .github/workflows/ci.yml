@@ -8,7 +8,17 @@ on:
 
 jobs:
   test:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+            exe-suffix: ""
+          - platform: windows-latest
+            exe-suffix: ".exe"
+          - platform: ubuntu-22.04
+            exe-suffix: ""
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +36,12 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf build-essential curl wget file libxdo-dev libssl-dev
+
       - name: Install frontend deps
         run: npm ci
 
@@ -33,11 +49,13 @@ jobs:
       # `cargo check`/`test` — placeholders are enough here since CI never runs
       # the actual downloaded binaries, just compiles against their presence.
       - name: Placeholder bundled binaries
+        shell: bash
         run: |
           mkdir -p src-tauri/binaries
           for f in yt-dlp ffmpeg ffprobe; do
-            printf '#!/bin/sh\nexit 1\n' > "src-tauri/binaries/$f"
-            chmod +x "src-tauri/binaries/$f"
+            name="$f${{ matrix.exe-suffix }}"
+            printf '#!/bin/sh\nexit 1\n' > "src-tauri/binaries/$name"
+            chmod +x "src-tauri/binaries/$name"
           done
 
       - name: Type-check frontend

@@ -14,6 +14,16 @@ pub enum Tool {
 }
 
 impl Tool {
+    #[cfg(windows)]
+    pub fn bin_name(self) -> &'static str {
+        match self {
+            Tool::YtDlp => "yt-dlp.exe",
+            Tool::Ffmpeg => "ffmpeg.exe",
+            Tool::Ffprobe => "ffprobe.exe",
+        }
+    }
+
+    #[cfg(not(windows))]
     pub fn bin_name(self) -> &'static str {
         match self {
             Tool::YtDlp => "yt-dlp",
@@ -55,7 +65,12 @@ fn candidates(app: &AppHandle, tool: Tool) -> Vec<PathBuf> {
 
     out.push(PathBuf::from(name)); // resolved against $PATH by tokio::process::Command
 
+    #[cfg(target_os = "macos")]
     for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+        out.push(PathBuf::from(dir).join(name));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    for dir in ["/usr/local/bin", "/usr/bin", "/snap/bin"] {
         out.push(PathBuf::from(dir).join(name));
     }
 
