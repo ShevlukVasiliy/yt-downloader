@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api } from "../lib/api";
 import type { Analysis, DownloadSpec } from "../lib/types";
+import { useUrlHistoryStore } from "./useUrlHistory";
 
 function detectDisambiguation(raw: string): { videoUrl: string; playlistUrl: string } | null {
   try {
@@ -31,6 +32,7 @@ interface AnalysisState {
 
   setUrl: (url: string) => void;
   analyze: (url: string) => Promise<void>;
+  loadCached: (url: string, analysis: Analysis) => void;
   resolveDisambiguation: (choice: "video" | "playlist") => void;
   reset: () => void;
 
@@ -63,15 +65,29 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     try {
       const analysis = await api.analyzeUrl(rawUrl);
       set({
+        url: analysis.webpageUrl,
         analysis,
         loading: false,
         selectedIds:
           analysis.kind === "playlist" ? new Set(analysis.entries.map((e) => e.id)) : new Set(),
         overrides: {},
       });
+      useUrlHistoryStore.getState().add(analysis.webpageUrl, analysis);
     } catch (e) {
       set({ loading: false, error: String(e) });
     }
+  },
+
+  loadCached: (url, analysis) => {
+    set({
+      url,
+      analysis,
+      loading: false,
+      error: null,
+      pendingDisambiguation: null,
+      selectedIds: analysis.kind === "playlist" ? new Set(analysis.entries.map((e) => e.id)) : new Set(),
+      overrides: {},
+    });
   },
 
   resolveDisambiguation: (choice) => {

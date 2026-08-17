@@ -341,6 +341,12 @@ pub async fn retry_job(app: AppHandle, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn remove_job(app: AppHandle, id: String) -> Result<(), String> {
+    // Removing a job that's still running left its yt-dlp process orphaned
+    // (downloading to disk with no queue entry tracking it) — stop it first.
+    let sender = app.state::<QueueManager>().running.lock().await.get(&id).cloned();
+    if let Some(tx) = sender {
+        let _ = tx.send(KillReason::Cancel).await;
+    }
     {
         let qm = app.state::<QueueManager>();
         let mut jobs = qm.jobs.lock().await;

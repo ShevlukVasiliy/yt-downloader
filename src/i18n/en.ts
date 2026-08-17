@@ -4,6 +4,7 @@ export const en: Record<TranslationKey, string> = {
   "app.title": "YT Downloader",
 
   "urlbar.placeholder": "Paste a YouTube video, music, or playlist link",
+  "urlbar.placeholderWithHistory": "Paste a link or ↑↓ for recent ones",
   "urlbar.analyze": "Analyze",
   "urlbar.analyzing": "Fetching info…",
   "urlbar.pasteHint": "YouTube link found in clipboard",

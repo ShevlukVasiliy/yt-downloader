@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Search, Loader2, Clipboard, X, ListVideo, Video } from "lucide-react";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAnalysisStore } from "../store/useAnalysis";
+import { useUrlHistoryStore } from "../store/useUrlHistory";
 import { useT } from "../i18n";
 
 function looksLikeYoutubeUrl(text: string | null | undefined): text is string {
@@ -15,10 +16,13 @@ function looksLikeYoutubeUrl(text: string | null | undefined): text is string {
 
 export function UrlBar() {
   const t = useT();
-  const { url, setUrl, analyze, loading, error, pendingDisambiguation, resolveDisambiguation } =
+  const { url, setUrl, analyze, loadCached, loading, error, pendingDisambiguation, resolveDisambiguation } =
     useAnalysisStore();
+  const historyEntries = useUrlHistoryStore((s) => s.entries);
   const [clipboardSuggestion, setClipboardSuggestion] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const draftRef = useRef("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -47,6 +51,33 @@ export function UrlBar() {
     const trimmed = value.trim();
     if (!trimmed) return;
     void analyze(trimmed);
+  };
+
+  const goToHistoryEntry = (index: number) => {
+    const entry = historyEntries[index];
+    if (!entry) return;
+    setHistoryIndex(index);
+    setUrl(entry.url);
+    loadCached(entry.url, entry.analysis);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowUp") {
+      if (historyEntries.length === 0) return;
+      e.preventDefault();
+      if (historyIndex === -1) draftRef.current = url;
+      goToHistoryEntry(Math.min(historyIndex + 1, historyEntries.length - 1));
+    } else if (e.key === "ArrowDown") {
+      if (historyIndex === -1) return;
+      e.preventDefault();
+      const next = historyIndex - 1;
+      if (next < 0) {
+        setHistoryIndex(-1);
+        setUrl(draftRef.current);
+      } else {
+        goToHistoryEntry(next);
+      }
+    }
   };
 
   return (
@@ -80,8 +111,12 @@ export function UrlBar() {
         <input
           ref={inputRef}
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder={t("urlbar.placeholder")}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            if (historyIndex !== -1) setHistoryIndex(-1);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={historyEntries.length > 0 ? t("urlbar.placeholderWithHistory") : t("urlbar.placeholder")}
           className="no-drag min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:opacity-60"
           style={{ color: "var(--text)" }}
         />

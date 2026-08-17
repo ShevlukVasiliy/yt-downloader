@@ -43,11 +43,13 @@ export function JobCard({ job }: { job: Job }) {
 
   const percent = formatPercent(job.progress.downloadedBytes, job.progress.totalBytes);
   const isActive = ACTIVE_STATUSES.includes(job.status);
-  const canPause = isActive;
+  const canPause = isActive || job.status === "queued";
   const canResume = job.status === "paused";
   const canCancel = job.status === "queued" || isActive || job.status === "paused";
   const canRetry = job.status === "error" || job.status === "canceled";
-  const canRemove = job.status === "done" || job.status === "error" || job.status === "canceled";
+  // Removal is always available — for a running/queued job it cancels first
+  // (backend), so it never leaves an orphaned yt-dlp process behind.
+  const canRemove = true;
 
   return (
     <div className="flex gap-3 rounded-xl border p-3" style={{ borderColor: "var(--border)", background: "var(--bg-elevated)" }}>

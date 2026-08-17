@@ -2,6 +2,7 @@ export const ru = {
   "app.title": "YT Downloader",
 
   "urlbar.placeholder": "Вставьте ссылку на видео, музыку или плейлист YouTube",
+  "urlbar.placeholderWithHistory": "Вставьте ссылку или ↑↓ — недавние",
   "urlbar.analyze": "Анализировать",
   "urlbar.analyzing": "Получаем информацию…",
   "urlbar.pasteHint": "В буфере обмена ссылка YouTube",
