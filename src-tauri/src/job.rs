@@ -57,7 +57,7 @@ fn handle_postprocess_line(line: &str, current_filename: &mut Option<String>) ->
 }
 
 pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<KillReason>) {
-    let (url, spec) = {
+    let (url, mut spec) = {
         let qm = app.state::<QueueManager>();
         let jobs = qm.jobs.lock().await;
         match jobs.iter().find(|j| j.id == job_id) {
@@ -65,6 +65,15 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
             None => return,
         }
     };
+
+    // The configured rate limit is a total budget shared across every
+    // simultaneous download, not a per-process cap — otherwise N parallel
+    // downloads could together use up to N times the intended bandwidth,
+    // and whichever one grabs the connection first starves the others.
+    // yt-dlp has no live "adjust rate mid-download" control, so this splits
+    // evenly by the concurrency setting once, at job start.
+    let concurrency = *app.state::<QueueManager>().concurrency.lock().await;
+    spec.rate_limit_kbps = split_rate_limit(spec.rate_limit_kbps, concurrency);
 
     let ytdlp = match resolve(&app, Tool::YtDlp).await {
         Ok(p) => p,
@@ -178,4 +187,38 @@ async fn finalize(
 
 async fn finalize_error(app: &AppHandle, job_id: &str, message: String) {
     finalize(app, job_id, JobStatus::Error, None, Some(message)).await;
+}
+
+/// Divides a total bandwidth budget evenly across concurrent download slots.
+/// `None` (no limit configured) stays `None`; a configured limit never drops
+/// below 1 KB/s even at high concurrency, so it stays a real (if slow) cap
+/// rather than silently becoming unlimited via integer division to zero.
+fn split_rate_limit(total_kbps: Option<u32>, concurrency: usize) -> Option<u32> {
+    total_kbps.map(|total| (total / concurrency.max(1) as u32).max(1))
+}
+
+#[cfg(test)]
+mod split_rate_limit_tests {
+    use super::*;
+
+    #[test]
+    fn no_limit_stays_unlimited() {
+        assert_eq!(split_rate_limit(None, 3), None);
+    }
+
+    #[test]
+    fn splits_evenly_across_concurrency() {
+        assert_eq!(split_rate_limit(Some(3000), 3), Some(1000));
+        assert_eq!(split_rate_limit(Some(1000), 1), Some(1000));
+    }
+
+    #[test]
+    fn rounds_down_but_never_below_one_kbps() {
+        assert_eq!(split_rate_limit(Some(2), 5), Some(1));
+    }
+
+    #[test]
+    fn zero_concurrency_treated_as_one() {
+        assert_eq!(split_rate_limit(Some(500), 0), Some(500));
+    }
 }

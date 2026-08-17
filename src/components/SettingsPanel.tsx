@@ -112,7 +112,7 @@ export function SettingsPanel() {
         </div>
       </Field>
 
-      <Field label={t("settings.rateLimit")}>
+      <Field label={t("settings.rateLimit")} hint={t("settings.rateLimitHint")}>
         <input
           type="number"
           min={0}
