@@ -36,7 +36,12 @@ jobs:
       # yt-dlp/ffmpeg/ffprobe aren't committed to the repo (large, platform-specific
       # binaries) — fetch fresh static builds here and bundle them as Tauri
       # resources, exactly like a local `tauri build` expects in src-tauri/binaries/.
-      - name: Prepare bundled yt-dlp/ffmpeg/ffprobe
+      #
+      # qjs (quickjs-ng) and bgutil-pot are pinned rather than "latest": yt-dlp
+      # only needs a JS runtime/PO-token provider that satisfy its own version
+      # floor, so there's no benefit to floating these, and a pin keeps builds
+      # reproducible. Bump deliberately when needed.
+      - name: Prepare bundled yt-dlp/ffmpeg/ffprobe/qjs/bgutil-pot
         run: |
           set -euo pipefail
           mkdir -p src-tauri/binaries
@@ -49,12 +54,31 @@ jobs:
           unzip -o ffprobe.zip -x '*.txt' -d .
           rm -f ffmpeg.zip ffprobe.zip
 
-          chmod +x yt-dlp ffmpeg ffprobe
-          codesign --force -s - yt-dlp ffmpeg ffprobe
+          curl -fL --retry 3 -o qjs https://github.com/quickjs-ng/quickjs/releases/download/v0.16.2/qjs-darwin-arm64
+          curl -fL --retry 3 -o bgutil-pot https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-macos-aarch64
+
+          chmod +x yt-dlp ffmpeg ffprobe qjs bgutil-pot
+          codesign --force -s - yt-dlp ffmpeg ffprobe qjs bgutil-pot
 
           ./yt-dlp --version
           ./ffmpeg -version | head -1
           ./ffprobe -version | head -1
+          ./qjs --version
+          ./bgutil-pot --version
+
+      # The yt-dlp plugin that talks to bgutil-pot. Must land at
+      # pot-plugin/bgutil/yt_dlp_plugins/... — yt-dlp's `--plugin-dirs X` lists
+      # the entries inside X and checks each for a yt_dlp_plugins/ folder, so
+      # X (passed as `pot-plugin`) needs `bgutil/` as an intermediate level.
+      - name: Prepare PO-token provider plugin
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/pot-plugin/bgutil
+          cd src-tauri/pot-plugin/bgutil
+          curl -fL --retry 3 -o plugin.zip https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip
+          unzip -o plugin.zip
+          rm -f plugin.zip
+          test -d yt_dlp_plugins/extractor
 
       # tauri-apps/tauri-action's macOS bundle_dmg.sh is known to fail intermittently
       # (AppleScript/Finder flakiness) even on a clean runner — retry the build a
@@ -109,7 +133,7 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - name: Prepare bundled yt-dlp/ffmpeg/ffprobe
+      - name: Prepare bundled yt-dlp/ffmpeg/ffprobe/qjs/bgutil-pot
         shell: bash
         run: |
           set -euo pipefail
@@ -123,9 +147,25 @@ jobs:
           find extracted -iname ffprobe.exe -exec cp {} ./ffprobe.exe \;
           rm -rf extracted ffmpeg.zip
 
+          curl -fL --retry 3 -o qjs.exe https://github.com/quickjs-ng/quickjs/releases/download/v0.16.2/qjs-windows-x86_64.exe
+          curl -fL --retry 3 -o bgutil-pot.exe https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-windows-x86_64.exe
+
           ./yt-dlp.exe --version
           ./ffmpeg.exe -version | head -1
           ./ffprobe.exe -version | head -1
+          ./qjs.exe --version
+          ./bgutil-pot.exe --version
+
+      - name: Prepare PO-token provider plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/pot-plugin/bgutil
+          cd src-tauri/pot-plugin/bgutil
+          curl -fL --retry 3 -o plugin.zip https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip
+          unzip -o plugin.zip
+          rm -f plugin.zip
+          test -d yt_dlp_plugins/extractor
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -166,7 +206,7 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - name: Prepare bundled yt-dlp/ffmpeg/ffprobe
+      - name: Prepare bundled yt-dlp/ffmpeg/ffprobe/qjs/bgutil-pot
         run: |
           set -euo pipefail
           mkdir -p src-tauri/binaries
@@ -179,10 +219,25 @@ jobs:
           find extracted -name ffprobe -type f -exec cp {} ./ffprobe \;
           rm -rf extracted ffmpeg.tar.xz
 
-          chmod +x yt-dlp ffmpeg ffprobe
+          curl -fL --retry 3 -o qjs https://github.com/quickjs-ng/quickjs/releases/download/v0.16.2/qjs-linux-x86_64
+          curl -fL --retry 3 -o bgutil-pot https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-linux-x86_64
+
+          chmod +x yt-dlp ffmpeg ffprobe qjs bgutil-pot
           ./yt-dlp --version
           ./ffmpeg -version | head -1
           ./ffprobe -version | head -1
+          ./qjs --version
+          ./bgutil-pot --version
+
+      - name: Prepare PO-token provider plugin
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/pot-plugin/bgutil
+          cd src-tauri/pot-plugin/bgutil
+          curl -fL --retry 3 -o plugin.zip https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip
+          unzip -o plugin.zip
+          rm -f plugin.zip
+          test -d yt_dlp_plugins/extractor
 
       - uses: tauri-apps/tauri-action@v0
         env:

@@ -1,6 +1,7 @@
 use crate::bin::{resolve, Tool};
 use crate::probe::friendly_error;
 use crate::queue::{update_progress, JobProgress, JobStatus, KillReason, QueueManager};
+use crate::runtime::resolve_runtime_env;
 use crate::spec::to_argv;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -83,7 +84,8 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
         }
     };
 
-    let argv = to_argv(&spec, &url);
+    let env = resolve_runtime_env(&app).await;
+    let argv = to_argv(&spec, &url, &env);
 
     let mut child = match Command::new(&ytdlp)
         .args(&argv)

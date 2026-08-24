@@ -50,6 +50,11 @@ export function SettingsPanel() {
     if (dir) void update({ downloadDir: dir });
   };
 
+  const chooseCookiesFile = async () => {
+    const file = await api.pickCookiesFile();
+    if (file) void update({ cookiesFile: file, cookiesFromBrowser: null });
+  };
+
   const runUpdate = async () => {
     setUpdateState("loading");
     try {
@@ -158,11 +163,50 @@ export function SettingsPanel() {
         />
       </Field>
 
-      <Field label={t("settings.cookiesFromBrowser")}>
+      <Field label={t("settings.cookiesFile")} hint={t("settings.cookiesFileHint")}>
+        <div className="flex gap-2">
+          <input
+            readOnly
+            value={settings.cookiesFile ?? ""}
+            placeholder={t("settings.cookiesFileNone")}
+            className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm outline-none"
+            style={inputStyle()}
+          />
+          <button
+            onClick={() => void chooseCookiesFile()}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-sm"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <FolderOpen size={14} />
+            {t("settings.choose")}
+          </button>
+          {settings.cookiesFile && (
+            <button
+              onClick={() => void update({ cookiesFile: null })}
+              className="shrink-0 rounded-lg border px-3 py-2 text-sm"
+              style={{ borderColor: "var(--border)" }}
+            >
+              {t("settings.cookiesClear")}
+            </button>
+          )}
+        </div>
+        <a
+          href="https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs underline"
+          style={{ color: "var(--text-faint)" }}
+        >
+          {t("settings.cookiesFileGuide")}
+        </a>
+      </Field>
+
+      <Field label={t("settings.cookiesFromBrowser")} hint={settings.cookiesFile ? t("settings.cookiesFromBrowserDisabledHint") : undefined}>
         <select
           value={settings.cookiesFromBrowser ?? ""}
           onChange={(e) => void update({ cookiesFromBrowser: e.target.value || null })}
-          className="rounded-lg border px-3 py-2 text-sm outline-none"
+          disabled={!!settings.cookiesFile}
+          className="rounded-lg border px-3 py-2 text-sm outline-none disabled:opacity-50"
           style={inputStyle()}
         >
           <option value="">{t("settings.cookiesNone")}</option>

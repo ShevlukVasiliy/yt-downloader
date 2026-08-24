@@ -29,6 +29,7 @@ export const api = {
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   pickDownloadDir: (defaultPath?: string) =>
     invoke<string | null>("pick_download_dir", { defaultPath: defaultPath ?? null }),
+  pickCookiesFile: () => invoke<string | null>("pick_cookies_file"),
 };
 
 export interface JobProgressEvent {

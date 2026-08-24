@@ -4,7 +4,10 @@
     "resources": {
       "binaries/yt-dlp": "binaries/yt-dlp",
       "binaries/ffmpeg": "binaries/ffmpeg",
-      "binaries/ffprobe": "binaries/ffprobe"
+      "binaries/ffprobe": "binaries/ffprobe",
+      "binaries/qjs": "binaries/qjs",
+      "binaries/bgutil-pot": "binaries/bgutil-pot",
+      "pot-plugin": "pot-plugin"
     }
   }
 }

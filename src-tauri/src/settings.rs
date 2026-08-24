@@ -19,6 +19,10 @@ pub struct Settings {
     pub rate_limit_kbps: Option<u32>,
     pub proxy: Option<String>,
     pub cookies_from_browser: Option<String>,
+    /// A `cookies.txt` file, preferred over `cookies_from_browser` when both are
+    /// set (see `spec::network_args`).
+    #[serde(default)]
+    pub cookies_file: Option<String>,
     pub theme: String,
     pub locale: String,
     /// Passed to yt-dlp's own --retries/--fragment-retries for transient network hiccups
@@ -45,6 +49,7 @@ impl Settings {
             rate_limit_kbps: None,
             proxy: None,
             cookies_from_browser: None,
+            cookies_file: None,
             theme: "dark".into(),
             locale: "ru".into(),
             network_retries: default_network_retries(),
@@ -86,6 +91,18 @@ pub async fn pick_download_dir(app: AppHandle, default_path: Option<String>) -> 
     let (tx, rx) = tokio::sync::oneshot::channel();
     builder.pick_folder(move |folder| {
         let _ = tx.send(folder);
+    });
+    let result = rx.await.map_err(|e| e.to_string())?;
+    Ok(result.map(|p| p.to_string()))
+}
+
+#[tauri::command]
+pub async fn pick_cookies_file(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let builder = app.dialog().file().add_filter("cookies.txt", &["txt"]);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    builder.pick_file(move |file| {
+        let _ = tx.send(file);
     });
     let result = rx.await.map_err(|e| e.to_string())?;
     Ok(result.map(|p| p.to_string()))

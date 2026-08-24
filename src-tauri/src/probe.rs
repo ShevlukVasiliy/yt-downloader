@@ -179,8 +179,22 @@ pub fn friendly_error(stderr: &str) -> String {
         "Видео недоступно".to_string()
     } else if lower.contains("this live event") {
         "Трансляция ещё не началась".to_string()
-    } else if lower.contains("sign in") || lower.contains("age") {
-        "Требуется подтверждение возраста или вход в аккаунт".to_string()
+    } else if lower.contains("no supported javascript runtime") {
+        // Should not happen once runtime_args() always resolves a bundled qjs —
+        // if this fires, the qjs resource failed to resolve or run. Distinct
+        // from the bot-check message below since the fix is different (missing
+        // dependency, not missing auth).
+        "Не найден JS-рантайм для YouTube — переустановите приложение".to_string()
+    } else if lower.contains("confirm you're not a bot") || lower.contains("confirm you are not a bot") {
+        "YouTube требует подтверждения, что вы не бот — включите cookies из браузера в настройках".to_string()
+    } else if lower.contains("sign in to confirm your age")
+        || (lower.contains("age") && lower.contains("restrict"))
+    {
+        "Видео с возрастным ограничением — включите cookies из браузера в настройках".to_string()
+    } else if lower.contains("sign in") || lower.contains("login_required") {
+        "Требуется вход в аккаунт YouTube — включите cookies из браузера в настройках".to_string()
+    } else if lower.contains("403") && lower.contains("forbidden") {
+        "YouTube отклонил запрос (403) — попробуйте включить cookies или сменить прокси".to_string()
     } else if lower.contains("unable to download webpage") || lower.contains("network") {
         "Не удалось подключиться к YouTube — проверьте интернет".to_string()
     } else {
@@ -197,16 +211,37 @@ pub async fn analyze_url(app: AppHandle, url: String) -> Result<Analysis, String
     let url = validate_url(&url)?;
     let bin = resolve(&app, Tool::YtDlp).await?;
 
+    // Analysis hits the exact same YouTube defenses (JS challenge, PO token) as
+    // an actual download, so it needs the same runtime/network flags — a job
+    // that would fail without them would otherwise report a misleadingly
+    // healthy analysis first.
+    let env = crate::runtime::resolve_runtime_env(&app).await;
+    let net = match crate::settings::get_settings(app.clone()).await {
+        Ok(s) => crate::spec::NetworkOpts {
+            proxy: s.proxy,
+            cookies_from_browser: s.cookies_from_browser,
+            cookies_file: s.cookies_file,
+            network_retries: s.network_retries,
+        },
+        Err(_) => crate::spec::NetworkOpts {
+            network_retries: 10,
+            ..Default::default()
+        },
+    };
+
+    let mut args: Vec<String> = vec![
+        "--dump-single-json".into(),
+        "--flat-playlist".into(),
+        "--no-check-certificate".into(),
+        "--ignore-no-formats-error".into(),
+    ];
+    args.extend(crate::spec::runtime_args(&env));
+    args.extend(crate::spec::network_args(&net));
+    args.push("--".into());
+    args.push(url.clone());
+
     let output = Command::new(&bin)
-        .args([
-            "--dump-single-json",
-            "--flat-playlist",
-            "--no-warnings",
-            "--no-check-certificate",
-            "--ignore-no-formats-error",
-            "--",
-        ])
-        .arg(&url)
+        .args(&args)
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -334,5 +369,41 @@ mod validate_url_tests {
             result,
             "https://www.youtube.com/playlist?list=PLejGw9J2xE9VX0RFX2loRlOzg7fjatGL3"
         );
+    }
+}
+
+#[cfg(test)]
+mod friendly_error_tests {
+    use super::*;
+
+    #[test]
+    fn bot_check_is_distinguished_from_age_restriction() {
+        let bot = friendly_error("ERROR: [youtube] xyz: Sign in to confirm you're not a bot");
+        assert!(bot.contains("бот"), "expected bot-check message, got: {bot}");
+
+        let age = friendly_error("ERROR: [youtube] xyz: Sign in to confirm your age");
+        assert!(age.contains("возраст"), "expected age-restriction message, got: {age}");
+        assert!(!age.contains("бот"));
+    }
+
+    #[test]
+    fn message_containing_age_as_a_substring_is_not_misclassified() {
+        // Regression test: the old `lower.contains("age")` matched "message",
+        // "usage", "package" etc. and mislabeled unrelated errors as
+        // age-restriction.
+        let msg = friendly_error("ERROR: [youtube] xyz: Unsupported URL, this is not a valid webpage");
+        assert!(!msg.contains("возраст"));
+    }
+
+    #[test]
+    fn missing_js_runtime_gets_its_own_message() {
+        let msg = friendly_error("WARNING: No supported JavaScript runtime could be found");
+        assert!(msg.contains("JS-рантайм"), "got: {msg}");
+    }
+
+    #[test]
+    fn plain_403_forbidden_gets_actionable_hint() {
+        let msg = friendly_error("ERROR: unable to download video data: HTTP Error 403: Forbidden");
+        assert!(msg.contains("403"), "got: {msg}");
     }
 }

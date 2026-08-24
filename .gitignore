@@ -13,6 +13,10 @@ src-tauri/gen/schemas/
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 
+# PO-token provider yt-dlp plugin — fetched at build time alongside the binaries above
+src-tauri/pot-plugin/*
+!src-tauri/pot-plugin/.gitkeep
+
 # Editor / OS
 .DS_Store
 .vscode/*

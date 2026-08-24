@@ -1,7 +1,9 @@
 mod bin;
 mod job;
+mod pot;
 mod probe;
 mod queue;
+mod runtime;
 mod settings;
 mod spec;
 
@@ -16,6 +18,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(bin::BinCache::default())
         .manage(queue::QueueManager::new())
+        .manage(pot::PotServer::default())
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -42,6 +45,7 @@ pub fn run() {
             settings::get_settings,
             settings::save_settings,
             settings::pick_download_dir,
+            settings::pick_cookies_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

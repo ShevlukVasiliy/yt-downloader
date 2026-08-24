@@ -4,17 +4,22 @@ import { api } from "../lib/api";
 import { useT } from "../i18n";
 import type { DepsStatus, ToolStatus } from "../lib/types";
 
-function Row({ tool, label }: { tool: ToolStatus; label: string }) {
+function Row({ tool, label, optional }: { tool: ToolStatus; label: string; optional?: boolean }) {
   const t = useT();
   return (
     <div className="flex items-center justify-between rounded-lg border px-3.5 py-2.5" style={{ borderColor: "var(--border)" }}>
       <div className="flex items-center gap-2.5">
         {tool.found ? (
           <CheckCircle2 size={18} className="shrink-0" style={{ color: "var(--success)" }} />
+        ) : optional ? (
+          <XCircle size={18} className="shrink-0" style={{ color: "var(--text-faint)" }} />
         ) : (
           <XCircle size={18} className="shrink-0" style={{ color: "var(--danger)" }} />
         )}
-        <span className="font-medium">{label}</span>
+        <span className="font-medium">
+          {label}
+          {optional && !tool.found && <span style={{ color: "var(--text-faint)" }}> ({t("deps.optional")})</span>}
+        </span>
       </div>
       <span className="text-sm" style={{ color: "var(--text-muted)" }}>
         {tool.found
@@ -87,6 +92,8 @@ export function DepsGate({ onReady }: { onReady: () => void }) {
             <Row tool={status.ytDlp} label="yt-dlp" />
             <Row tool={status.ffmpeg} label="ffmpeg" />
             <Row tool={status.ffprobe} label="ffprobe" />
+            <Row tool={status.jsRuntime} label={t("deps.jsRuntime")} />
+            <Row tool={status.potProvider} label={t("deps.potProvider")} optional />
           </div>
         ) : null}
 

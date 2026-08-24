@@ -11,6 +11,12 @@ pub enum Tool {
     YtDlp,
     Ffmpeg,
     Ffprobe,
+    /// quickjs-ng: the JS runtime yt-dlp needs to solve YouTube's JS challenges
+    /// (nsig/sig) since 2025.11.12. See src/runtime.rs.
+    Qjs,
+    /// PO-token provider (bgutil-ytdlp-pot-provider-rs), run as a local HTTP server.
+    /// See src/pot.rs.
+    BgutilPot,
 }
 
 impl Tool {
@@ -20,6 +26,8 @@ impl Tool {
             Tool::YtDlp => "yt-dlp.exe",
             Tool::Ffmpeg => "ffmpeg.exe",
             Tool::Ffprobe => "ffprobe.exe",
+            Tool::Qjs => "qjs.exe",
+            Tool::BgutilPot => "bgutil-pot.exe",
         }
     }
 
@@ -29,15 +37,17 @@ impl Tool {
             Tool::YtDlp => "yt-dlp",
             Tool::Ffmpeg => "ffmpeg",
             Tool::Ffprobe => "ffprobe",
+            Tool::Qjs => "qjs",
+            Tool::BgutilPot => "bgutil-pot",
         }
     }
 
-    /// yt-dlp uses Python-argparse-style `--version`; ffmpeg/ffprobe use their own
+    /// yt-dlp/qjs/bgutil-pot all use `--version`; ffmpeg/ffprobe use their own
     /// classic single-dash `-version` and reject the double-dash form outright.
     fn version_flag(self) -> &'static str {
         match self {
-            Tool::YtDlp => "--version",
             Tool::Ffmpeg | Tool::Ffprobe => "-version",
+            Tool::YtDlp | Tool::Qjs | Tool::BgutilPot => "--version",
         }
     }
 }
@@ -45,14 +55,27 @@ impl Tool {
 #[derive(Default)]
 pub struct BinCache(Mutex<HashMap<&'static str, (PathBuf, String)>>);
 
+/// Where `update_yt_dlp` writes a freshly self-updated binary. Never write into
+/// the bundled resource path directly: on macOS that path lives inside the
+/// signed `.app`, and yt-dlp's `-U` rewriting it in place breaks the bundle's
+/// code signature (the binary then fails to launch at all).
+fn appdata_bin_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("bin"))
+}
+
 /// Candidate locations for a tool, checked in order:
-/// 1. Bundled resource (production `.app` bundle)
-/// 2. `src-tauri/binaries/` next to the crate (dev loop, before a real build)
-/// 3. `$PATH`
-/// 4. Well-known Homebrew / system install locations
+/// 1. Self-updated copy in the app's data dir (see `appdata_bin_dir`)
+/// 2. Bundled resource (production `.app` bundle)
+/// 3. `src-tauri/binaries/` next to the crate (dev loop, before a real build)
+/// 4. `$PATH`
+/// 5. Well-known Homebrew / system install locations
 fn candidates(app: &AppHandle, tool: Tool) -> Vec<PathBuf> {
     let name = tool.bin_name();
     let mut out = Vec::new();
+
+    if let Some(dir) = appdata_bin_dir(app) {
+        out.push(dir.join(name));
+    }
 
     if let Ok(resource) = app
         .path()
@@ -169,33 +192,68 @@ pub struct DepsStatus {
     pub yt_dlp: ToolStatus,
     pub ffmpeg: ToolStatus,
     pub ffprobe: ToolStatus,
+    /// The external JS runtime yt-dlp needs to solve YouTube's challenges
+    /// (bundled quickjs-ng, or a faster system deno if one's on PATH). Blocking:
+    /// without it YouTube extraction silently loses formats and misfires as a
+    /// bot-check.
+    pub js_runtime: ToolStatus,
+    /// PO-token provider (bgutil-pot). Non-blocking: some formats/clients work
+    /// without it, so its absence shouldn't gate `all_ready`.
+    pub pot_provider: ToolStatus,
     pub all_ready: bool,
 }
 
 #[tauri::command]
 pub async fn check_deps(app: AppHandle) -> DepsStatus {
-    let (yt_dlp, ffmpeg, ffprobe) = tokio::join!(
+    let (yt_dlp, ffmpeg, ffprobe, pot_provider) = tokio::join!(
         status(&app, Tool::YtDlp),
         status(&app, Tool::Ffmpeg),
         status(&app, Tool::Ffprobe),
+        status(&app, Tool::BgutilPot),
     );
-    let all_ready = yt_dlp.found && ffmpeg.found && ffprobe.found;
+    let js_runtime = crate::runtime::js_runtime_status(&app).await;
+    let all_ready = yt_dlp.found && ffmpeg.found && ffprobe.found && js_runtime.found;
     eprintln!(
-        "[deps] yt-dlp found={} ({:?}) ffmpeg found={} ({:?}) ffprobe found={} ({:?}) all_ready={}",
-        yt_dlp.found, yt_dlp.version, ffmpeg.found, ffmpeg.version, ffprobe.found, ffprobe.version, all_ready
+        "[deps] yt-dlp found={} ({:?}) ffmpeg found={} ({:?}) ffprobe found={} ({:?}) js_runtime found={} ({:?}) pot found={} ({:?}) all_ready={}",
+        yt_dlp.found, yt_dlp.version, ffmpeg.found, ffmpeg.version, ffprobe.found, ffprobe.version,
+        js_runtime.found, js_runtime.version, pot_provider.found, pot_provider.version, all_ready
     );
     DepsStatus {
         yt_dlp,
         ffmpeg,
         ffprobe,
+        js_runtime,
+        pot_provider,
         all_ready,
     }
 }
 
 #[tauri::command]
 pub async fn update_yt_dlp(app: AppHandle) -> Result<String, String> {
-    let path = resolve(&app, Tool::YtDlp).await?;
-    let output = Command::new(&path)
+    let current = resolve(&app, Tool::YtDlp).await?;
+    let appdata_dir = appdata_bin_dir(&app).ok_or_else(|| "Не удалось определить каталог данных приложения".to_string())?;
+    tokio::fs::create_dir_all(&appdata_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let target = appdata_dir.join(Tool::YtDlp.bin_name());
+
+    if target != current {
+        tokio::fs::copy(&current, &target).await.map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&target)
+                .await
+                .map_err(|e| e.to_string())?
+                .permissions();
+            perms.set_mode(0o755);
+            tokio::fs::set_permissions(&target, perms)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    let output = Command::new(&target)
         .arg("-U")
         .output()
         .await

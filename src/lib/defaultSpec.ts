@@ -21,6 +21,7 @@ export function createDefaultSpec(): DownloadSpec {
     rateLimitKbps: null,
     proxy: null,
     cookiesFromBrowser: null,
+    cookiesFile: null,
     downloadArchivePath: null,
     ffmpegDir: null,
     networkRetries: 10,
@@ -35,6 +36,7 @@ export function withSettings(spec: DownloadSpec, settings: Settings): DownloadSp
     rateLimitKbps: settings.rateLimitKbps,
     proxy: settings.proxy,
     cookiesFromBrowser: settings.cookiesFromBrowser,
+    cookiesFile: settings.cookiesFile,
     networkRetries: settings.networkRetries,
   };
 }

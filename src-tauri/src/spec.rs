@@ -89,28 +89,111 @@ pub struct DownloadSpec {
     pub rate_limit_kbps: Option<u32>,
     pub proxy: Option<String>,
     pub cookies_from_browser: Option<String>,
+    /// A `cookies.txt` file, preferred over `cookies_from_browser` when both are
+    /// set: `--cookies-from-browser` needs OS-keychain access and fails while the
+    /// browser holds its profile lock, which a plain file never runs into.
+    #[serde(default)]
+    pub cookies_file: Option<String>,
     pub download_archive_path: Option<String>,
     pub ffmpeg_dir: Option<String>,
     pub network_retries: u32,
 }
 
+/// Where the JS runtime and PO-token provider live, resolved once per app
+/// (src/runtime.rs, src/pot.rs) and independent of any particular job — both
+/// `to_argv` (downloads) and `analyze_url` (probing) need the exact same
+/// values, since YouTube enforces the same challenges on both request paths.
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeEnv {
+    /// yt-dlp `--js-runtimes` value, e.g. `"quickjs:/path/to/qjs"`.
+    pub js_runtime_arg: Option<String>,
+    pub pot_plugin_dir: Option<String>,
+    pub pot_base_url: Option<String>,
+    pub pot_cli_path: Option<String>,
+}
+
+/// Network-facing options shared between downloads (from `DownloadSpec`) and
+/// analysis (from global `Settings`, which has no per-job spec).
+#[derive(Clone, Debug, Default)]
+pub struct NetworkOpts {
+    pub proxy: Option<String>,
+    pub cookies_from_browser: Option<String>,
+    pub cookies_file: Option<String>,
+    pub network_retries: u32,
+}
+
+/// JS runtime + PO-token provider flags.
+///
+/// Deliberately does NOT pin or exclude specific YouTube player clients.
+/// yt-dlp's own default client rotation changes every few weeks as YouTube
+/// blocks/unblocks clients (e.g. `android_vr` was dropped from defaults and
+/// replaced by `visionos` between 2026.07.04 and 2026.08.19) — an
+/// exclusion hardcoded here would go stale exactly as fast and, worse, can
+/// actively fight a fix that already landed upstream: excluding `android_vr`
+/// after yt-dlp itself removed it from defaults left some videos with no
+/// working client at all (`--list-formats` showed only storyboards). Staying
+/// current on yt-dlp (see `bin::update_yt_dlp`) is the actual fix; this
+/// function has no business re-deciding client selection.
+pub fn runtime_args(env: &RuntimeEnv) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(rt) = &env.js_runtime_arg {
+        args.push("--js-runtimes".into());
+        args.push(rt.clone());
+    }
+    if let Some(dir) = &env.pot_plugin_dir {
+        args.push("--plugin-dirs".into());
+        args.push(dir.clone());
+    }
+    if let Some(base_url) = &env.pot_base_url {
+        args.push("--extractor-args".into());
+        args.push(format!("youtubepot-bgutilhttp:base_url={base_url}"));
+    }
+    if let Some(cli) = &env.pot_cli_path {
+        args.push("--extractor-args".into());
+        args.push(format!("youtubepot-bgutilcli:cli_path={cli}"));
+    }
+    args
+}
+
+/// Retries/proxy/cookies flags. `cookies_file` wins over `cookies_from_browser`
+/// when both are set (see the field doc on `DownloadSpec::cookies_file`).
+pub fn network_args(net: &NetworkOpts) -> Vec<String> {
+    let mut args = vec![
+        "--retries".into(),
+        net.network_retries.to_string(),
+        "--fragment-retries".into(),
+        net.network_retries.to_string(),
+    ];
+    if let Some(proxy) = net.proxy.as_deref().filter(|p| !p.is_empty()) {
+        args.push("--proxy".into());
+        args.push(proxy.into());
+    }
+    if let Some(file) = net.cookies_file.as_deref().filter(|f| !f.is_empty()) {
+        args.push("--cookies".into());
+        args.push(file.into());
+    } else if let Some(browser) = net.cookies_from_browser.as_deref().filter(|b| !b.is_empty()) {
+        args.push("--cookies-from-browser".into());
+        args.push(browser.into());
+    }
+    args
+}
+
 /// Pure translation of a DownloadSpec into yt-dlp argv. Deliberately side-effect
 /// free and independent of any resolved binary paths so it stays unit-testable.
-pub fn to_argv(spec: &DownloadSpec, url: &str) -> Vec<String> {
+/// `--no-warnings` is deliberately omitted: warnings are how a regression in
+/// the JS-runtime/PO-token setup would surface in logs, so silencing them
+/// would hide the exact class of failure this module exists to prevent.
+pub fn to_argv(spec: &DownloadSpec, url: &str, env: &RuntimeEnv) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "--newline".into(),
-        "--no-warnings".into(),
         "--no-playlist".into(),
         "--continue".into(),
-        "--retries".into(),
-        spec.network_retries.to_string(),
-        "--fragment-retries".into(),
-        spec.network_retries.to_string(),
         "--progress-template".into(),
         "download:[DLPROG]%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(info.filename)s".into(),
         "--progress-template".into(),
         "postprocess:[PPPROG]%(progress.status)s|%(postprocessor)s|%(info.filename)s".into(),
     ];
+    args.extend(runtime_args(env));
 
     match spec.mode {
         Mode::Video => {
@@ -195,14 +278,12 @@ pub fn to_argv(spec: &DownloadSpec, url: &str) -> Vec<String> {
         args.push("--limit-rate".into());
         args.push(format!("{rate}K"));
     }
-    if let Some(proxy) = spec.proxy.as_deref().filter(|p| !p.is_empty()) {
-        args.push("--proxy".into());
-        args.push(proxy.into());
-    }
-    if let Some(browser) = spec.cookies_from_browser.as_deref().filter(|b| !b.is_empty()) {
-        args.push("--cookies-from-browser".into());
-        args.push(browser.into());
-    }
+    args.extend(network_args(&NetworkOpts {
+        proxy: spec.proxy.clone(),
+        cookies_from_browser: spec.cookies_from_browser.clone(),
+        cookies_file: spec.cookies_file.clone(),
+        network_retries: spec.network_retries,
+    }));
     if let Some(archive) = spec.download_archive_path.as_deref().filter(|a| !a.is_empty()) {
         args.push("--download-archive".into());
         args.push(archive.into());
@@ -236,6 +317,7 @@ mod tests {
             rate_limit_kbps: None,
             proxy: None,
             cookies_from_browser: None,
+            cookies_file: None,
             download_archive_path: None,
             ffmpeg_dir: None,
             network_retries: 10,
@@ -245,7 +327,7 @@ mod tests {
     #[test]
     fn video_1080_mp4_prefers_avc1_for_quicktime_compat_and_merges() {
         let spec = base_spec();
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         assert!(argv.contains(&"-f".to_string()));
         let f_index = argv.iter().position(|a| a == "-f").unwrap();
         assert_eq!(
@@ -261,7 +343,7 @@ mod tests {
     fn video_best_quality_omits_height_filter() {
         let mut spec = base_spec();
         spec.max_height = None;
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         let f_index = argv.iter().position(|a| a == "-f").unwrap();
         assert_eq!(
             argv[f_index + 1],
@@ -273,7 +355,7 @@ mod tests {
     fn video_only_strips_audio_track_from_selector() {
         let mut spec = base_spec();
         spec.video_only = true;
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         let f_index = argv.iter().position(|a| a == "-f").unwrap();
         assert_eq!(
             argv[f_index + 1],
@@ -286,7 +368,7 @@ mod tests {
     fn mkv_container_does_not_restrict_codec() {
         let mut spec = base_spec();
         spec.container = VideoContainer::Mkv;
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         let f_index = argv.iter().position(|a| a == "-f").unwrap();
         assert_eq!(argv[f_index + 1], "bestvideo[height<=1080]+bestaudio/best[height<=1080]");
         assert!(!argv[f_index + 1].contains("avc1"));
@@ -298,7 +380,7 @@ mod tests {
         spec.mode = Mode::Audio;
         spec.audio_format = AudioFormat::Mp3;
         spec.audio_quality = AudioQuality::Kbps(320);
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         assert!(argv.contains(&"-x".to_string()));
         assert!(!argv.contains(&"-f".to_string()));
         assert!(!argv.contains(&"--merge-output-format".to_string()));
@@ -322,7 +404,7 @@ mod tests {
             auto: true,
             embed: true,
         };
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         for flag in [
             "--embed-thumbnail",
             "--embed-metadata",
@@ -343,7 +425,7 @@ mod tests {
     #[test]
     fn subtitles_disabled_omits_all_subtitle_flags() {
         let spec = base_spec();
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         assert!(!argv.iter().any(|a| a.contains("subs")));
     }
 
@@ -355,7 +437,7 @@ mod tests {
         spec.cookies_from_browser = Some("chrome".into());
         spec.download_archive_path = Some("/tmp/archive.txt".into());
         spec.ffmpeg_dir = Some("/opt/homebrew/bin".into());
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         assert!(argv.windows(2).any(|w| w[0] == "--limit-rate" && w[1] == "500K"));
         assert!(argv
             .windows(2)
@@ -372,7 +454,7 @@ mod tests {
     #[test]
     fn url_is_last_and_separated_by_double_dash() {
         let spec = base_spec();
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         assert_eq!(argv[argv.len() - 1], "https://www.youtube.com/watch?v=abc");
         assert_eq!(argv[argv.len() - 2], "--");
     }
@@ -381,9 +463,73 @@ mod tests {
     fn network_retries_apply_to_both_retries_flags() {
         let mut spec = base_spec();
         spec.network_retries = 25;
-        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc");
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
         assert!(argv.windows(2).any(|w| w[0] == "--retries" && w[1] == "25"));
         assert!(argv.windows(2).any(|w| w[0] == "--fragment-retries" && w[1] == "25"));
+    }
+
+    #[test]
+    fn does_not_hardcode_a_player_client_selection() {
+        // Regression test: a hardcoded `-android_vr` exclusion here once broke
+        // downloads for videos where android_vr was the only client with real
+        // (non-storyboard) formats, once yt-dlp itself dropped android_vr from
+        // its defaults. Client selection belongs to yt-dlp, not to us.
+        let spec = base_spec();
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
+        assert!(!argv.iter().any(|a| a.starts_with("youtube:player_client")));
+    }
+
+    #[test]
+    fn js_runtime_and_pot_args_appear_when_env_resolved() {
+        let spec = base_spec();
+        let env = RuntimeEnv {
+            js_runtime_arg: Some("quickjs:/opt/qjs".into()),
+            pot_plugin_dir: Some("/opt/pot-plugin".into()),
+            pot_base_url: Some("http://127.0.0.1:4416".into()),
+            pot_cli_path: Some("/opt/bgutil-pot".into()),
+        };
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &env);
+        assert!(argv.windows(2).any(|w| w[0] == "--js-runtimes" && w[1] == "quickjs:/opt/qjs"));
+        assert!(argv.windows(2).any(|w| w[0] == "--plugin-dirs" && w[1] == "/opt/pot-plugin"));
+        assert!(argv.windows(2).any(|w| w[0] == "--extractor-args"
+            && w[1] == "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416"));
+        assert!(argv.windows(2).any(|w| w[0] == "--extractor-args"
+            && w[1] == "youtubepot-bgutilcli:cli_path=/opt/bgutil-pot"));
+    }
+
+    #[test]
+    fn unresolved_runtime_env_omits_runtime_and_pot_flags() {
+        let spec = base_spec();
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
+        assert!(!argv.contains(&"--js-runtimes".to_string()));
+        assert!(!argv.contains(&"--plugin-dirs".to_string()));
+        assert!(!argv.iter().any(|a| a.starts_with("youtubepot-")));
+    }
+
+    #[test]
+    fn cookies_file_wins_over_cookies_from_browser() {
+        let net = NetworkOpts {
+            proxy: None,
+            cookies_from_browser: Some("chrome".into()),
+            cookies_file: Some("/tmp/cookies.txt".into()),
+            network_retries: 10,
+        };
+        let args = network_args(&net);
+        assert!(args.windows(2).any(|w| w[0] == "--cookies" && w[1] == "/tmp/cookies.txt"));
+        assert!(!args.contains(&"--cookies-from-browser".to_string()));
+    }
+
+    #[test]
+    fn cookies_from_browser_used_when_no_file_set() {
+        let net = NetworkOpts {
+            proxy: None,
+            cookies_from_browser: Some("chrome".into()),
+            cookies_file: None,
+            network_retries: 10,
+        };
+        let args = network_args(&net);
+        assert!(args.windows(2).any(|w| w[0] == "--cookies-from-browser" && w[1] == "chrome"));
+        assert!(!args.contains(&"--cookies".to_string()));
     }
 }
 

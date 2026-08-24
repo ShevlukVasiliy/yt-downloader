@@ -69,6 +69,7 @@ export interface DownloadSpec {
   rateLimitKbps: number | null;
   proxy: string | null;
   cookiesFromBrowser: string | null;
+  cookiesFile: string | null;
   downloadArchivePath: string | null;
   ffmpegDir: string | null;
   networkRetries: number;
@@ -130,6 +131,8 @@ export interface DepsStatus {
   ytDlp: ToolStatus;
   ffmpeg: ToolStatus;
   ffprobe: ToolStatus;
+  jsRuntime: ToolStatus;
+  potProvider: ToolStatus;
   allReady: boolean;
 }
 
@@ -143,6 +146,7 @@ export interface Settings {
   rateLimitKbps: number | null;
   proxy: string | null;
   cookiesFromBrowser: string | null;
+  cookiesFile: string | null;
   theme: Theme;
   locale: Locale;
   networkRetries: number;
