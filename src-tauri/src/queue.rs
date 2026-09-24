@@ -48,6 +48,10 @@ pub struct Job {
     pub status: JobStatus,
     pub progress: JobProgress,
     pub error: Option<String>,
+    /// Raw tail of yt-dlp's stderr behind `error` (which is the short,
+    /// human-readable summary), shown when the user expands the error.
+    #[serde(default)]
+    pub error_detail: Option<String>,
     pub output_path: Option<String>,
     pub created_at: String,
     #[serde(default)]
@@ -206,6 +210,7 @@ async fn try_schedule_inner(app: AppHandle) {
                                 job.status = JobStatus::Queued;
                                 job.progress = JobProgress::default();
                                 job.error = None;
+                                job.error_detail = None;
                                 true
                             }
                             _ => false,
@@ -269,6 +274,7 @@ pub async fn enqueue_jobs(app: AppHandle, requests: Vec<NewJobRequest>) -> Resul
                 status: JobStatus::Queued,
                 progress: JobProgress::default(),
                 error: None,
+                error_detail: None,
                 output_path: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 retries_left: auto_retry_attempts,
@@ -330,6 +336,7 @@ pub async fn retry_job(app: AppHandle, id: String) -> Result<(), String> {
             job.status = JobStatus::Queued;
             job.progress = JobProgress::default();
             job.error = None;
+            job.error_detail = None;
             job.retries_left = auto_retry_attempts;
         }
     }

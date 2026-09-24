@@ -1,8 +1,9 @@
 use crate::bin::{resolve, Tool};
-use crate::probe::friendly_error;
+use crate::probe::{friendly_error, is_cookie_client_rejection};
 use crate::queue::{update_progress, JobProgress, JobStatus, KillReason, QueueManager};
 use crate::runtime::resolve_runtime_env;
 use crate::spec::to_argv;
+use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -57,6 +58,91 @@ fn handle_postprocess_line(line: &str, current_filename: &mut Option<String>) ->
     })
 }
 
+enum Attempt {
+    Done,
+    Killed(KillReason),
+    /// Joined tail of yt-dlp's stderr.
+    Failed(String),
+    SpawnFailed(String),
+}
+
+/// One yt-dlp invocation: streams its progress into the job and stops it on a
+/// pause/cancel request. `current_filename` outlives the attempt so a retry
+/// keeps knowing which partial file belongs to this job.
+async fn attempt(
+    app: &AppHandle,
+    job_id: &str,
+    ytdlp: &Path,
+    argv: &[String],
+    kill_rx: &mut mpsc::Receiver<KillReason>,
+    current_filename: &mut Option<String>,
+) -> Attempt {
+    let mut child = match Command::new(ytdlp)
+        .args(argv)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return Attempt::SpawnFailed(format!("Не удалось запустить yt-dlp: {e}")),
+    };
+
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+
+    let stderr_buf = Arc::new(AsyncMutex::new(Vec::<String>::new()));
+    let stderr_buf2 = stderr_buf.clone();
+    let stderr_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let mut buf = stderr_buf2.lock().await;
+            if buf.len() >= 50 {
+                buf.remove(0);
+            }
+            buf.push(line);
+        }
+    });
+
+    let mut stdout_lines = BufReader::new(stdout).lines();
+    let mut kill_reason: Option<KillReason> = None;
+
+    loop {
+        tokio::select! {
+            line = stdout_lines.next_line() => {
+                match line {
+                    Ok(Some(l)) => {
+                        if let Some(progress) = handle_download_line(&l, current_filename) {
+                            update_progress(app, job_id, progress, JobStatus::Downloading).await;
+                        } else if let Some(status) = handle_postprocess_line(&l, current_filename) {
+                            update_progress(app, job_id, JobProgress::default(), status).await;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            reason = kill_rx.recv() => {
+                if let Some(r) = reason {
+                    let _ = child.start_kill();
+                    kill_reason = Some(r);
+                }
+                break;
+            }
+        }
+    }
+
+    let exit_status = child.wait().await;
+    let _ = stderr_task.await;
+
+    if let Some(r) = kill_reason {
+        return Attempt::Killed(r);
+    }
+    match exit_status {
+        Ok(status) if status.success() => Attempt::Done,
+        _ => Attempt::Failed(stderr_buf.lock().await.join("\n")),
+    }
+}
+
 pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<KillReason>) {
     let (url, mut spec) = {
         let qm = app.state::<QueueManager>();
@@ -79,93 +165,71 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
     let ytdlp = match resolve(&app, Tool::YtDlp).await {
         Ok(p) => p,
         Err(e) => {
-            finalize_error(&app, &job_id, e).await;
+            finalize_error(&app, &job_id, e, None).await;
             return;
         }
     };
 
     let env = resolve_runtime_env(&app).await;
-    let argv = to_argv(&spec, &url, &env);
-
-    let mut child = match Command::new(&ytdlp)
-        .args(&argv)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            finalize_error(&app, &job_id, format!("Не удалось запустить yt-dlp: {e}")).await;
-            return;
-        }
-    };
-
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-
-    let stderr_buf = Arc::new(AsyncMutex::new(Vec::<String>::new()));
-    let stderr_buf2 = stderr_buf.clone();
-    let stderr_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let mut buf = stderr_buf2.lock().await;
-            if buf.len() >= 50 {
-                buf.remove(0);
-            }
-            buf.push(line);
-        }
-    });
-
-    let mut stdout_lines = BufReader::new(stdout).lines();
     let mut current_filename: Option<String> = None;
-    let mut kill_reason: Option<KillReason> = None;
 
-    loop {
-        tokio::select! {
-            line = stdout_lines.next_line() => {
-                match line {
-                    Ok(Some(l)) => {
-                        if let Some(progress) = handle_download_line(&l, &mut current_filename) {
-                            update_progress(&app, &job_id, progress, JobStatus::Downloading).await;
-                        } else if let Some(status) = handle_postprocess_line(&l, &mut current_filename) {
-                            update_progress(&app, &job_id, JobProgress::default(), status).await;
-                        }
-                    }
-                    _ => break,
+    let mut outcome = attempt(
+        &app,
+        &job_id,
+        &ytdlp,
+        &to_argv(&spec, &url, &env),
+        &mut kill_rx,
+        &mut current_filename,
+    )
+    .await;
+
+    if let Attempt::Failed(first_stderr) = &outcome {
+        if spec.network_opts().uses_cookies() && is_cookie_client_rejection(first_stderr) {
+            // `--continue` in the argv resumes whatever the first attempt
+            // already wrote to disk.
+            let retry = attempt(
+                &app,
+                &job_id,
+                &ytdlp,
+                &to_argv(&spec.without_cookies(), &url, &env),
+                &mut kill_rx,
+                &mut current_filename,
+            )
+            .await;
+            outcome = match retry {
+                // A video that genuinely needs the account (private, age-gated)
+                // still fails without cookies. Report the original error — the
+                // no-cookies one would tell the user to enable cookies they
+                // already have — but keep both stderr tails in the details.
+                Attempt::Failed(retry_stderr) => {
+                    let message = friendly_error(first_stderr);
+                    let detail = format!("{first_stderr}\n\n--- повтор без cookies ---\n{retry_stderr}");
+                    finalize_error(&app, &job_id, message, Some(detail)).await;
+                    return;
                 }
-            }
-            reason = kill_rx.recv() => {
-                if let Some(r) = reason {
-                    let _ = child.start_kill();
-                    kill_reason = Some(r);
-                }
-                break;
-            }
+                other => other,
+            };
         }
     }
 
-    let exit_status = child.wait().await;
-    let _ = stderr_task.await;
-
-    match kill_reason {
-        Some(KillReason::Pause) => {
-            finalize(&app, &job_id, JobStatus::Paused, None, None).await;
+    match outcome {
+        Attempt::Killed(KillReason::Pause) => {
+            finalize(&app, &job_id, JobStatus::Paused, None, None, None).await;
         }
-        Some(KillReason::Cancel) => {
+        Attempt::Killed(KillReason::Cancel) => {
             cleanup_partial(&current_filename).await;
-            finalize(&app, &job_id, JobStatus::Canceled, None, None).await;
+            finalize(&app, &job_id, JobStatus::Canceled, None, None, None).await;
         }
-        None => match exit_status {
-            Ok(status) if status.success() => {
-                finalize(&app, &job_id, JobStatus::Done, current_filename, None).await;
-            }
-            _ => {
-                let lines = stderr_buf.lock().await.clone();
-                let message = friendly_error(&lines.join("\n"));
-                finalize_error(&app, &job_id, message).await;
-            }
-        },
+        Attempt::Done => {
+            finalize(&app, &job_id, JobStatus::Done, current_filename, None, None).await;
+        }
+        Attempt::SpawnFailed(message) => {
+            finalize_error(&app, &job_id, message, None).await;
+        }
+        Attempt::Failed(stderr) => {
+            let message = friendly_error(&stderr);
+            finalize_error(&app, &job_id, message, Some(stderr)).await;
+        }
     }
 }
 
@@ -175,6 +239,7 @@ async fn finalize(
     status: JobStatus,
     output_path: Option<String>,
     error: Option<String>,
+    error_detail: Option<String>,
 ) {
     let qm = app.state::<QueueManager>();
     let mut jobs = qm.jobs.lock().await;
@@ -184,11 +249,12 @@ async fn finalize(
             job.output_path = output_path;
         }
         job.error = error;
+        job.error_detail = error_detail.filter(|d| !d.trim().is_empty());
     }
 }
 
-async fn finalize_error(app: &AppHandle, job_id: &str, message: String) {
-    finalize(app, job_id, JobStatus::Error, None, Some(message)).await;
+async fn finalize_error(app: &AppHandle, job_id: &str, message: String, detail: Option<String>) {
+    finalize(app, job_id, JobStatus::Error, None, Some(message), detail).await;
 }
 
 /// Divides a total bandwidth budget evenly across concurrent download slots.

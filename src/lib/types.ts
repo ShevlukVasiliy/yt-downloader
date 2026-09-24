@@ -104,6 +104,7 @@ export interface Job {
   status: JobStatus;
   progress: JobProgress;
   error: string | null;
+  errorDetail: string | null;
   outputPath: string | null;
   createdAt: string;
   retriesLeft: number;

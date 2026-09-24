@@ -122,6 +122,42 @@ pub struct NetworkOpts {
     pub network_retries: u32,
 }
 
+impl NetworkOpts {
+    /// Mirrors `network_args`: an empty string is treated as "not set".
+    pub fn uses_cookies(&self) -> bool {
+        [&self.cookies_file, &self.cookies_from_browser]
+            .iter()
+            .any(|c| c.as_deref().is_some_and(|v| !v.is_empty()))
+    }
+
+    pub fn without_cookies(&self) -> Self {
+        Self {
+            cookies_file: None,
+            cookies_from_browser: None,
+            ..self.clone()
+        }
+    }
+}
+
+impl DownloadSpec {
+    pub fn network_opts(&self) -> NetworkOpts {
+        NetworkOpts {
+            proxy: self.proxy.clone(),
+            cookies_from_browser: self.cookies_from_browser.clone(),
+            cookies_file: self.cookies_file.clone(),
+            network_retries: self.network_retries,
+        }
+    }
+
+    pub fn without_cookies(&self) -> Self {
+        Self {
+            cookies_file: None,
+            cookies_from_browser: None,
+            ..self.clone()
+        }
+    }
+}
+
 /// JS runtime + PO-token provider flags.
 ///
 /// Deliberately does NOT pin or exclude specific YouTube player clients.
@@ -278,12 +314,7 @@ pub fn to_argv(spec: &DownloadSpec, url: &str, env: &RuntimeEnv) -> Vec<String> 
         args.push("--limit-rate".into());
         args.push(format!("{rate}K"));
     }
-    args.extend(network_args(&NetworkOpts {
-        proxy: spec.proxy.clone(),
-        cookies_from_browser: spec.cookies_from_browser.clone(),
-        cookies_file: spec.cookies_file.clone(),
-        network_retries: spec.network_retries,
-    }));
+    args.extend(network_args(&spec.network_opts()));
     if let Some(archive) = spec.download_archive_path.as_deref().filter(|a| !a.is_empty()) {
         args.push("--download-archive".into());
         args.push(archive.into());
@@ -530,6 +561,32 @@ mod tests {
         let args = network_args(&net);
         assert!(args.windows(2).any(|w| w[0] == "--cookies-from-browser" && w[1] == "chrome"));
         assert!(!args.contains(&"--cookies".to_string()));
+    }
+
+    #[test]
+    fn without_cookies_drops_both_cookie_sources_and_keeps_the_rest() {
+        let mut spec = base_spec();
+        spec.cookies_file = Some("/tmp/cookies.txt".into());
+        spec.cookies_from_browser = Some("chrome".into());
+        spec.proxy = Some("socks5://127.0.0.1:1080".into());
+        assert!(spec.network_opts().uses_cookies());
+
+        let stripped = spec.without_cookies();
+        assert!(!stripped.network_opts().uses_cookies());
+        let argv = to_argv(&stripped, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
+        assert!(!argv.contains(&"--cookies".to_string()));
+        assert!(!argv.contains(&"--cookies-from-browser".to_string()));
+        assert!(argv.windows(2).any(|w| w[0] == "--proxy" && w[1] == "socks5://127.0.0.1:1080"));
+    }
+
+    #[test]
+    fn empty_cookie_settings_do_not_count_as_using_cookies() {
+        let net = NetworkOpts {
+            cookies_from_browser: Some(String::new()),
+            cookies_file: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(!net.uses_cookies());
     }
 }
 

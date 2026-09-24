@@ -171,9 +171,22 @@ pub fn validate_url(raw: &str) -> Result<String, String> {
     Ok(effective.to_string())
 }
 
+/// yt-dlp picks the `tv_downgraded` client by default whenever cookies are
+/// passed, and since August 2026 YouTube answers that client with "The page
+/// needs to be reloaded." (yt-dlp#17389) — while the very same request without
+/// cookies goes through. Callers retry once without cookies when this matches.
+pub fn is_cookie_client_rejection(stderr: &str) -> bool {
+    stderr.to_lowercase().contains("the page needs to be reloaded")
+}
+
 pub fn friendly_error(stderr: &str) -> String {
     let lower = stderr.to_lowercase();
-    if lower.contains("private video") {
+    if is_cookie_client_rejection(stderr) {
+        // Only reaches the user once the automatic no-cookies retry failed too,
+        // i.e. the video really needs the account — the fix has to come from
+        // yt-dlp's side.
+        "YouTube отклонил запрос с cookies («The page needs to be reloaded»), а без cookies видео недоступно — обновите yt-dlp в настройках".to_string()
+    } else if lower.contains("private video") {
         "Это приватное видео — нужен вход в аккаунт".to_string()
     } else if lower.contains("video unavailable") {
         "Видео недоступно".to_string()
@@ -229,22 +242,42 @@ pub async fn analyze_url(app: AppHandle, url: String) -> Result<Analysis, String
         },
     };
 
-    let mut args: Vec<String> = vec![
-        "--dump-single-json".into(),
-        "--flat-playlist".into(),
-        "--no-check-certificate".into(),
-        "--ignore-no-formats-error".into(),
-    ];
-    args.extend(crate::spec::runtime_args(&env));
-    args.extend(crate::spec::network_args(&net));
-    args.push("--".into());
-    args.push(url.clone());
+    let build_args = |net: &crate::spec::NetworkOpts| {
+        let mut args: Vec<String> = vec![
+            "--dump-single-json".into(),
+            "--flat-playlist".into(),
+            "--no-check-certificate".into(),
+            "--ignore-no-formats-error".into(),
+        ];
+        args.extend(crate::spec::runtime_args(&env));
+        args.extend(crate::spec::network_args(net));
+        args.push("--".into());
+        args.push(url.clone());
+        args
+    };
 
-    let output = Command::new(&bin)
-        .args(&args)
+    let mut output = Command::new(&bin)
+        .args(build_args(&net))
         .output()
         .await
         .map_err(|e| e.to_string())?;
+
+    if !output.status.success()
+        && net.uses_cookies()
+        && is_cookie_client_rejection(&String::from_utf8_lossy(&output.stderr))
+    {
+        let retry = Command::new(&bin)
+            .args(build_args(&net.without_cookies()))
+            .output()
+            .await
+            .map_err(|e| e.to_string())?;
+        // A video that genuinely needs the account (private, age-gated) still
+        // fails without cookies — keep the original error for it, since the
+        // no-cookies one would tell the user to enable cookies they already have.
+        if retry.status.success() {
+            output = retry;
+        }
+    }
 
     if !output.status.success() {
         return Err(friendly_error(&String::from_utf8_lossy(&output.stderr)));
@@ -399,6 +432,15 @@ mod friendly_error_tests {
     fn missing_js_runtime_gets_its_own_message() {
         let msg = friendly_error("WARNING: No supported JavaScript runtime could be found");
         assert!(msg.contains("JS-рантайм"), "got: {msg}");
+    }
+
+    #[test]
+    fn page_reload_rejection_is_detected_and_explained() {
+        let stderr = "ERROR: [youtube] abc: The page needs to be reloaded.";
+        assert!(is_cookie_client_rejection(stderr));
+        let msg = friendly_error(stderr);
+        assert!(msg.contains("cookies"), "got: {msg}");
+        assert!(!is_cookie_client_rejection("ERROR: [youtube] abc: Video unavailable"));
     }
 
     #[test]

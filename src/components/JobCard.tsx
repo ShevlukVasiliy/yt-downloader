@@ -125,12 +125,12 @@ export function JobCard({ job }: { job: Job }) {
           )}
         </div>
 
-        {detailsOpen && job.status === "error" && job.error && (
+        {detailsOpen && job.status === "error" && (job.errorDetail || job.error) && (
           <pre
             className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md p-2 text-[11px]"
             style={{ background: "var(--bg)", color: "var(--text-muted)" }}
           >
-            {job.error}
+            {job.errorDetail ?? job.error}
           </pre>
         )}
       </div>
