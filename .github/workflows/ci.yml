@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/binaries
-          for f in yt-dlp ffmpeg ffprobe; do
+          for f in yt-dlp ffmpeg ffprobe qjs bgutil-pot; do
             name="$f${{ matrix.exe-suffix }}"
             printf '#!/bin/sh\nexit 1\n' > "src-tauri/binaries/$name"
             chmod +x "src-tauri/binaries/$name"
