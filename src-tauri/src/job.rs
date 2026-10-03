@@ -2,7 +2,7 @@ use crate::bin::{resolve, Tool};
 use crate::probe::{friendly_error, is_cookie_client_rejection};
 use crate::queue::{update_progress, JobProgress, JobStatus, KillReason, QueueManager};
 use crate::runtime::resolve_runtime_env;
-use crate::spec::to_argv;
+use crate::spec::{to_argv, Mode, SubtitleFormat};
 use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -58,6 +58,79 @@ fn handle_postprocess_line(line: &str, current_filename: &mut Option<String>) ->
     })
 }
 
+/// yt-dlp's announcement of each subtitle file — the only place a
+/// `--skip-download` run reports where it wrote anything.
+const SUBTITLE_LINE: &str = "[info] Writing video subtitles to: ";
+
+/// Turns what a subtitles-only run wrote into the files the user asked for:
+/// follows `--convert-subs` renames, folds the `<lang>-orig` duplicate of an
+/// auto track into `<lang>`, and strips timing for plain text. Returns the
+/// final paths.
+async fn finish_subtitles(written: &[String], format: SubtitleFormat) -> Vec<String> {
+    let target_ext = if format == SubtitleFormat::Vtt { "vtt" } else { "srt" };
+    let mut converted: Vec<std::path::PathBuf> = written
+        .iter()
+        .map(|p| Path::new(p).with_extension(target_ext))
+        .filter(|p| p.exists())
+        .collect();
+    converted.dedup();
+
+    let mut finals = Vec::new();
+    for path in &converted {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+        let mut path = path.clone();
+        if let Some(base) = stem.strip_suffix("-orig") {
+            let plain = path.with_file_name(format!("{base}.{target_ext}"));
+            if converted.contains(&plain) {
+                let _ = tokio::fs::remove_file(&path).await;
+                continue;
+            }
+            if tokio::fs::rename(&path, &plain).await.is_ok() {
+                path = plain;
+            }
+        }
+        if format == SubtitleFormat::Txt {
+            let Ok(srt) = tokio::fs::read_to_string(&path).await else { continue };
+            let txt_path = path.with_extension("txt");
+            if tokio::fs::write(&txt_path, srt_to_text(&srt)).await.is_ok() {
+                let _ = tokio::fs::remove_file(&path).await;
+                path = txt_path;
+            }
+        }
+        finals.push(path.to_string_lossy().to_string());
+    }
+    finals
+}
+
+/// SRT → plain text: drops cue numbers, timings and markup, and collapses
+/// the rolling repeats auto-captions are made of.
+fn srt_to_text(srt: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for raw in srt.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.contains("-->") || line.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let mut clean = String::new();
+        let mut in_tag = false;
+        for c in line.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                _ if !in_tag => clean.push(c),
+                _ => {}
+            }
+        }
+        let clean = clean.trim().to_string();
+        if !clean.is_empty() && lines.last() != Some(&clean) {
+            lines.push(clean);
+        }
+    }
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text
+}
+
 enum Attempt {
     Done,
     Killed(KillReason),
@@ -76,6 +149,7 @@ async fn attempt(
     argv: &[String],
     kill_rx: &mut mpsc::Receiver<KillReason>,
     current_filename: &mut Option<String>,
+    subtitle_files: &mut Vec<String>,
 ) -> Attempt {
     let mut child = match Command::new(ytdlp)
         .args(argv)
@@ -112,7 +186,9 @@ async fn attempt(
             line = stdout_lines.next_line() => {
                 match line {
                     Ok(Some(l)) => {
-                        if let Some(progress) = handle_download_line(&l, current_filename) {
+                        if let Some(path) = l.strip_prefix(SUBTITLE_LINE) {
+                            subtitle_files.push(path.trim().to_string());
+                        } else if let Some(progress) = handle_download_line(&l, current_filename) {
                             update_progress(app, job_id, progress, JobStatus::Downloading).await;
                         } else if let Some(status) = handle_postprocess_line(&l, current_filename) {
                             update_progress(app, job_id, JobProgress::default(), status).await;
@@ -172,6 +248,7 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
 
     let env = resolve_runtime_env(&app).await;
     let mut current_filename: Option<String> = None;
+    let mut subtitle_files: Vec<String> = Vec::new();
 
     let mut outcome = attempt(
         &app,
@@ -180,6 +257,7 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
         &to_argv(&spec, &url, &env),
         &mut kill_rx,
         &mut current_filename,
+        &mut subtitle_files,
     )
     .await;
 
@@ -194,6 +272,7 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
                 &to_argv(&spec.without_cookies(), &url, &env),
                 &mut kill_rx,
                 &mut current_filename,
+                &mut subtitle_files,
             )
             .await;
             outcome = match retry {
@@ -219,6 +298,15 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
         Attempt::Killed(KillReason::Cancel) => {
             cleanup_partial(&current_filename).await;
             finalize(&app, &job_id, JobStatus::Canceled, None, None, None).await;
+        }
+        Attempt::Done if spec.mode == Mode::Subtitles => {
+            let files = finish_subtitles(&subtitle_files, spec.subtitle_format).await;
+            match files.into_iter().next() {
+                Some(first) => finalize(&app, &job_id, JobStatus::Done, Some(first), None, None).await,
+                None => {
+                    finalize_error(&app, &job_id, "У этого видео нет субтитров на выбранных языках".into(), None).await
+                }
+            }
         }
         Attempt::Done => {
             finalize(&app, &job_id, JobStatus::Done, current_filename, None, None).await;
@@ -263,6 +351,41 @@ async fn finalize_error(app: &AppHandle, job_id: &str, message: String, detail: 
 /// rather than silently becoming unlimited via integer division to zero.
 fn split_rate_limit(total_kbps: Option<u32>, concurrency: usize) -> Option<u32> {
     total_kbps.map(|total| (total / concurrency.max(1) as u32).max(1))
+}
+
+#[cfg(test)]
+mod subtitle_tests {
+    use super::*;
+
+    #[test]
+    fn srt_becomes_plain_text_without_rolling_repeats() {
+        let srt = "1\n00:00:00,000 --> 00:00:02,000\nhello <c>there</c>\n\n2\n00:00:02,000 --> 00:00:04,000\nhello there\nnext line\n";
+        assert_eq!(srt_to_text(srt), "hello there\nnext line\n");
+    }
+
+    #[tokio::test]
+    async fn orig_track_is_folded_into_plain_language_and_txt_written() {
+        let dir = std::env::temp_dir().join(format!("subs-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let srt = "1\n00:00:00,000 --> 00:00:01,000\nhi\n";
+        tokio::fs::write(dir.join("v.en-orig.srt"), srt).await.unwrap();
+        tokio::fs::write(dir.join("v.ru.srt"), srt).await.unwrap();
+        let written = vec![
+            dir.join("v.en-orig.vtt").to_string_lossy().to_string(),
+            dir.join("v.ru.vtt").to_string_lossy().to_string(),
+        ];
+        let mut out = finish_subtitles(&written, SubtitleFormat::Txt).await;
+        out.sort();
+        assert_eq!(
+            out,
+            vec![
+                dir.join("v.en.txt").to_string_lossy().to_string(),
+                dir.join("v.ru.txt").to_string_lossy().to_string()
+            ]
+        );
+        assert_eq!(tokio::fs::read_to_string(dir.join("v.en.txt")).await.unwrap(), "hi\n");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
 }
 
 #[cfg(test)]

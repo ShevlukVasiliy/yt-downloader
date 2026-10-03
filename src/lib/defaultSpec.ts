@@ -3,6 +3,7 @@ import type { DownloadSpec, Settings } from "./types";
 export function createDefaultSpec(): DownloadSpec {
   return {
     mode: "video",
+    subtitleFormat: "srt",
     maxHeight: null,
     container: "mp4",
     videoOnly: false,

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   AlertCircle,
+  Captions,
   Check,
   CheckCheck,
   Download,
@@ -171,6 +172,14 @@ function Inbox() {
             >
               <Music size={12} />
               {t("format.audio")}
+            </button>
+            <button
+              onClick={() => void downloadSelected("subtitles")}
+              className="flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium"
+              style={{ background: "var(--accent)", color: "white" }}
+            >
+              <Captions size={12} />
+              {t("format.subtitlesMode")}
             </button>
             <button
               onClick={() => {

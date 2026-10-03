@@ -35,7 +35,8 @@ export interface PlaylistInfo {
 
 export type Analysis = VideoInfo | PlaylistInfo;
 
-export type Mode = "video" | "audio";
+export type Mode = "video" | "audio" | "subtitles";
+export type SubtitleFormat = "srt" | "vtt" | "txt";
 export type VideoContainer = "mp4" | "mkv" | "webm";
 export type AudioFormat = "mp3" | "m4a" | "opus" | "flac" | "wav";
 export type AudioQuality = { kind: "best" } | { kind: "kbps"; value: number };
@@ -58,6 +59,7 @@ export interface Extras {
 
 export interface DownloadSpec {
   mode: Mode;
+  subtitleFormat: SubtitleFormat;
   maxHeight: number | null;
   container: VideoContainer;
   videoOnly: boolean;

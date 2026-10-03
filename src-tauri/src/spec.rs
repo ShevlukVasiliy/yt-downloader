@@ -5,6 +5,28 @@ use serde::{Deserialize, Serialize};
 pub enum Mode {
     Video,
     Audio,
+    /// Only the subtitle files — no media is downloaded.
+    Subtitles,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtitleFormat {
+    #[default]
+    Srt,
+    Vtt,
+    /// Plain text without timestamps; yt-dlp writes srt and `job` strips it.
+    Txt,
+}
+
+impl SubtitleFormat {
+    /// What yt-dlp's `--convert-subs` should produce.
+    fn convert_to(&self) -> &'static str {
+        match self {
+            SubtitleFormat::Vtt => "vtt",
+            SubtitleFormat::Srt | SubtitleFormat::Txt => "srt",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -78,6 +100,8 @@ pub struct Extras {
 #[serde(rename_all = "camelCase")]
 pub struct DownloadSpec {
     pub mode: Mode,
+    #[serde(default)]
+    pub subtitle_format: SubtitleFormat,
     pub max_height: Option<u32>,
     pub container: VideoContainer,
     pub video_only: bool,
@@ -275,34 +299,31 @@ pub fn to_argv(spec: &DownloadSpec, url: &str, env: &RuntimeEnv) -> Vec<String> 
                 AudioQuality::Kbps(k) => format!("{k}K"),
             });
         }
+        Mode::Subtitles => {
+            let subs = &spec.extras.subtitles;
+            let mut langs = subs.langs.clone();
+            if subs.auto {
+                // A video's own-language auto captions come as `<lang>-orig`;
+                // the plain `<lang>` auto tracks are machine translations, which
+                // YouTube rate-limits hard (HTTP 429).
+                langs.push(".*-orig".into());
+            }
+            // One missing or rate-limited language must not fail the others.
+            args.push("--ignore-errors".into());
+            args.push("--skip-download".into());
+            args.push("--write-subs".into());
+            if subs.auto {
+                args.push("--write-auto-subs".into());
+            }
+            args.push("--sub-langs".into());
+            args.push(langs.join(","));
+            args.push("--convert-subs".into());
+            args.push(spec.subtitle_format.convert_to().into());
+        }
     }
 
-    if spec.extras.embed_thumbnail {
-        args.push("--embed-thumbnail".into());
-    }
-    if spec.extras.embed_metadata {
-        args.push("--embed-metadata".into());
-    }
-    if spec.extras.embed_chapters {
-        args.push("--embed-chapters".into());
-    }
-    if spec.extras.write_info_json {
-        args.push("--write-info-json".into());
-    }
-    if spec.extras.sponsorblock {
-        args.push("--sponsorblock-remove".into());
-        args.push("sponsor,selfpromo,interaction".into());
-    }
-    if spec.extras.subtitles.enabled && !spec.extras.subtitles.langs.is_empty() {
-        args.push("--write-subs".into());
-        if spec.extras.subtitles.auto {
-            args.push("--write-auto-subs".into());
-        }
-        args.push("--sub-langs".into());
-        args.push(spec.extras.subtitles.langs.join(","));
-        if spec.extras.subtitles.embed {
-            args.push("--embed-subs".into());
-        }
+    if spec.mode != Mode::Subtitles {
+        push_extras(spec, &mut args);
     }
 
     args.push("--paths".into());
@@ -330,13 +351,44 @@ pub fn to_argv(spec: &DownloadSpec, url: &str, env: &RuntimeEnv) -> Vec<String> 
     args
 }
 
+fn push_extras(spec: &DownloadSpec, args: &mut Vec<String>) {
+    if spec.extras.embed_thumbnail {
+        args.push("--embed-thumbnail".into());
+    }
+    if spec.extras.embed_metadata {
+        args.push("--embed-metadata".into());
+    }
+    if spec.extras.embed_chapters {
+        args.push("--embed-chapters".into());
+    }
+    if spec.extras.write_info_json {
+        args.push("--write-info-json".into());
+    }
+    if spec.extras.sponsorblock {
+        args.push("--sponsorblock-remove".into());
+        args.push("sponsor,selfpromo,interaction".into());
+    }
+    if spec.extras.subtitles.enabled && !spec.extras.subtitles.langs.is_empty() {
+        args.push("--write-subs".into());
+        if spec.extras.subtitles.auto {
+            args.push("--write-auto-subs".into());
+        }
+        args.push("--sub-langs".into());
+        args.push(spec.extras.subtitles.langs.join(","));
+        if spec.extras.subtitles.embed {
+            args.push("--embed-subs".into());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn base_spec() -> DownloadSpec {
+    pub(super) fn base_spec() -> DownloadSpec {
         DownloadSpec {
             mode: Mode::Video,
+            subtitle_format: SubtitleFormat::Srt,
             max_height: Some(1080),
             container: VideoContainer::Mp4,
             video_only: false,
@@ -602,5 +654,40 @@ mod wire_format {
             serde_json::to_string(&AudioQuality::Kbps(320)).unwrap(),
             r#"{"kind":"kbps","value":320}"#
         );
+    }
+
+    #[test]
+    fn subtitles_mode_skips_media_and_extras() {
+        let mut spec = super::tests::base_spec();
+        spec.mode = Mode::Subtitles;
+        spec.extras.embed_thumbnail = true;
+        spec.extras.subtitles.langs = vec!["ru".into(), "en".into()];
+        spec.extras.subtitles.auto = true;
+        spec.subtitle_format = SubtitleFormat::Txt;
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
+        assert!(argv.contains(&"--skip-download".to_string()));
+        assert!(argv.contains(&"--ignore-errors".to_string()));
+        assert!(argv.contains(&"--write-auto-subs".to_string()));
+        assert!(!argv.contains(&"-f".to_string()));
+        assert!(!argv.contains(&"--embed-thumbnail".to_string()));
+        let langs = argv.iter().position(|a| a == "--sub-langs").unwrap();
+        assert_eq!(argv[langs + 1], "ru,en,.*-orig");
+        let conv = argv.iter().position(|a| a == "--convert-subs").unwrap();
+        assert_eq!(argv[conv + 1], "srt");
+    }
+
+    #[test]
+    fn manual_subtitles_only_do_not_ask_for_original_auto_track() {
+        let mut spec = super::tests::base_spec();
+        spec.mode = Mode::Subtitles;
+        spec.extras.subtitles.langs = vec!["en".into()];
+        spec.extras.subtitles.auto = false;
+        spec.subtitle_format = SubtitleFormat::Vtt;
+        let argv = to_argv(&spec, "https://www.youtube.com/watch?v=abc", &RuntimeEnv::default());
+        let langs = argv.iter().position(|a| a == "--sub-langs").unwrap();
+        assert_eq!(argv[langs + 1], "en");
+        assert!(!argv.contains(&"--write-auto-subs".to_string()));
+        let conv = argv.iter().position(|a| a == "--convert-subs").unwrap();
+        assert_eq!(argv[conv + 1], "vtt");
     }
 }

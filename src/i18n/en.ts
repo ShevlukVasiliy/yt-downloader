@@ -61,6 +61,13 @@ export const en: Record<TranslationKey, string> = {
   "format.download": "Download ({{count}})",
   "format.downloadDisabledNoSelection": "Select at least one video",
 
+  "format.subtitlesMode": "Subtitles",
+  "format.subtitleLangs": "Languages",
+  "format.subtitleLangOther": "other…",
+  "format.subtitleTxt": "txt (text only)",
+  "format.subtitlesAutoOrig": "Auto-generated captions in the video's language when there are no regular ones",
+  "format.subtitlesNoLang": "Pick at least one language",
+
   "queue.title": "Queue",
   "queue.history": "History",
   "queue.settings": "Settings",

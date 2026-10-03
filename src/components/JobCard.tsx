@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Music,
   Video as VideoIcon,
+  Captions,
 } from "lucide-react";
 import type { Job, JobStatus } from "../lib/types";
 import { useT } from "../i18n";
@@ -60,6 +61,8 @@ export function JobCard({ job }: { job: Job }) {
           <div className="flex h-full w-full items-center justify-center">
             {job.spec.mode === "audio" ? (
               <Music size={16} style={{ color: "var(--text-faint)" }} />
+            ) : job.spec.mode === "subtitles" ? (
+              <Captions size={16} style={{ color: "var(--text-faint)" }} />
             ) : (
               <VideoIcon size={16} style={{ color: "var(--text-faint)" }} />
             )}

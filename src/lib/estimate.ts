@@ -30,7 +30,7 @@ export function estimateBytesPerVideo(
   durationSeconds: number | null | undefined,
   availableHeights: number[] = [],
 ): number | null {
-  if (!durationSeconds || durationSeconds <= 0) return null;
+  if (!durationSeconds || durationSeconds <= 0 || spec.mode === "subtitles") return null;
   const kbps =
     spec.mode === "audio" ? audioBitrateKbps(spec) : videoBitrateFor(spec.maxHeight, availableHeights);
   return Math.round((durationSeconds * kbps * 1000) / 8);

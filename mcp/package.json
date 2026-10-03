@@ -1,0 +1,17 @@
+{
+  "name": "yt-downloader-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server that lets an assistant download from YouTube with the YT Downloader app's bundled tools and settings",
+  "bin": {
+    "yt-downloader-mcp": "server.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "zod": "^4.6.5"
+  }
+}

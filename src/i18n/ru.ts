@@ -59,6 +59,13 @@ export const ru = {
   "format.download": "Скачать ({{count}})",
   "format.downloadDisabledNoSelection": "Выберите хотя бы одно видео",
 
+  "format.subtitlesMode": "Субтитры",
+  "format.subtitleLangs": "Языки",
+  "format.subtitleLangOther": "другой…",
+  "format.subtitleTxt": "txt (только текст)",
+  "format.subtitlesAutoOrig": "Автоматические субтитры на языке видео, если обычных нет",
+  "format.subtitlesNoLang": "Выберите хотя бы один язык",
+
   "queue.title": "Очередь",
   "queue.history": "История",
   "queue.settings": "Настройки",

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import type { AudioFormat, DownloadSpec, VideoContainer } from "../lib/types";
+import type { AudioFormat, DownloadSpec, Mode, SubtitleFormat, VideoContainer } from "../lib/types";
+import type { TranslationKey } from "../i18n";
 import { useT } from "../i18n";
 import { formatBytes } from "../lib/format";
 import { estimateBytesPerVideo } from "../lib/estimate";
@@ -8,6 +9,14 @@ import { estimateBytesPerVideo } from "../lib/estimate";
 const HEIGHT_CHIPS = [2160, 1440, 1080, 720, 480, 360];
 const CONTAINERS: VideoContainer[] = ["mp4", "mkv", "webm"];
 const AUDIO_FORMATS: AudioFormat[] = ["mp3", "m4a", "opus", "flac", "wav"];
+const SUBTITLE_LANGS = ["ru", "en", "uk", "de", "fr", "es", "ja"];
+const SUBTITLE_FORMATS: SubtitleFormat[] = ["srt", "vtt", "txt"];
+const MODES: { id: Mode; label: TranslationKey }[] = [
+  { id: "video", label: "format.video" },
+  { id: "audio", label: "format.audio" },
+  { id: "subtitles", label: "format.subtitlesMode" },
+];
+
 const AUDIO_QUALITIES: { label: string; kbps: number | null }[] = [
   { label: "320", kbps: 320 },
   { label: "256", kbps: 256 },
@@ -82,22 +91,24 @@ export function FormatPicker({ spec, onChange, availableHeights = [], durationSe
   return (
     <div className="flex flex-col gap-4">
       <div className="inline-flex w-fit rounded-lg border p-0.5" style={{ borderColor: "var(--border)" }}>
-        {(["video", "audio"] as const).map((mode) => (
+        {MODES.map(({ id, label }) => (
           <button
-            key={mode}
-            onClick={() => onChange({ ...spec, mode })}
+            key={id}
+            onClick={() => onChange({ ...spec, mode: id })}
             className="rounded-md px-4 py-1.5 text-sm font-medium transition-colors"
             style={{
-              background: spec.mode === mode ? "var(--accent)" : "transparent",
-              color: spec.mode === mode ? "white" : "var(--text-muted)",
+              background: spec.mode === id ? "var(--accent)" : "transparent",
+              color: spec.mode === id ? "white" : "var(--text-muted)",
             }}
           >
-            {t(mode === "video" ? "format.video" : "format.audio")}
+            {t(label)}
           </button>
         ))}
       </div>
 
-      {spec.mode === "video" ? (
+      {spec.mode === "subtitles" ? (
+        <SubtitlesOnly spec={spec} onChange={onChange} />
+      ) : spec.mode === "video" ? (
         <>
           <div>
             <div className="mb-1.5 text-xs font-medium" style={{ color: "var(--text-muted)" }}>
@@ -179,7 +190,7 @@ export function FormatPicker({ spec, onChange, availableHeights = [], durationSe
         </>
       )}
 
-      <div>
+      {spec.mode !== "subtitles" && <div>
         <button
           type="button"
           onClick={() => setExtrasOpen((v) => !v)}
@@ -277,7 +288,7 @@ export function FormatPicker({ spec, onChange, availableHeights = [], durationSe
             )}
           </div>
         )}
-      </div>
+      </div>}
 
       {estimate != null && (
         <p className="text-xs" style={{ color: "var(--text-faint)" }}>
@@ -285,5 +296,67 @@ export function FormatPicker({ spec, onChange, availableHeights = [], durationSe
         </p>
       )}
     </div>
+  );
+}
+
+function SubtitlesOnly({ spec, onChange }: { spec: DownloadSpec; onChange: (spec: DownloadSpec) => void }) {
+  const t = useT();
+  const subs = spec.extras.subtitles;
+  const [custom, setCustom] = useState("");
+  const setSubs = (patch: Partial<DownloadSpec["extras"]["subtitles"]>) =>
+    onChange({ ...spec, extras: { ...spec.extras, subtitles: { ...subs, ...patch } } });
+  const toggleLang = (lang: string) =>
+    setSubs({ langs: subs.langs.includes(lang) ? subs.langs.filter((l) => l !== lang) : [...subs.langs, lang] });
+  const langs = [...SUBTITLE_LANGS, ...subs.langs.filter((l) => !SUBTITLE_LANGS.includes(l))];
+
+  return (
+    <>
+      <div>
+        <div className="mb-1.5 text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+          {t("format.subtitleLangs")}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {langs.map((lang) => (
+            <Chip key={lang} active={subs.langs.includes(lang)} onClick={() => toggleLang(lang)}>
+              {lang}
+            </Chip>
+          ))}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const code = custom.trim().toLowerCase();
+              if (code && !subs.langs.includes(code)) setSubs({ langs: [...subs.langs, code] });
+              setCustom("");
+            }}
+          >
+            <input
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              placeholder={t("format.subtitleLangOther")}
+              className="w-20 rounded-lg border bg-transparent px-2 py-1.5 text-xs outline-none"
+              style={{ borderColor: "var(--border)" }}
+            />
+          </form>
+        </div>
+      </div>
+      <div>
+        <div className="mb-1.5 text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+          {t("format.audioFormat")}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {SUBTITLE_FORMATS.map((f) => (
+            <Chip key={f} active={spec.subtitleFormat === f} onClick={() => onChange({ ...spec, subtitleFormat: f })}>
+              {f === "txt" ? t("format.subtitleTxt") : f}
+            </Chip>
+          ))}
+        </div>
+      </div>
+      <Checkbox checked={subs.auto} onChange={(v) => setSubs({ auto: v })} label={t("format.subtitlesAutoOrig")} />
+      {subs.langs.length === 0 && !subs.auto && (
+        <p className="text-xs" style={{ color: "var(--danger)" }}>
+          {t("format.subtitlesNoLang")}
+        </p>
+      )}
+    </>
   );
 }
