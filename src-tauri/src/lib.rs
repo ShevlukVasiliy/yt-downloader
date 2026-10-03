@@ -6,6 +6,7 @@ mod queue;
 mod runtime;
 mod settings;
 mod spec;
+mod subs;
 
 use tauri::Manager;
 
@@ -16,9 +17,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(bin::BinCache::default())
         .manage(queue::QueueManager::new())
         .manage(pot::PotServer::default())
+        .manage(subs::SubsManager::default())
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -46,6 +49,13 @@ pub fn run() {
             settings::save_settings,
             settings::pick_download_dir,
             settings::pick_cookies_file,
+            subs::subs_get,
+            subs::subs_add_channel,
+            subs::subs_import,
+            subs::subs_remove_channel,
+            subs::subs_update_channel,
+            subs::subs_set_items_state,
+            subs::subs_refresh,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

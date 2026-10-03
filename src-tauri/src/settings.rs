@@ -10,6 +10,10 @@ fn default_auto_retry_attempts() -> u32 {
     2
 }
 
+fn default_feed_refresh_minutes() -> u32 {
+    120
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -33,6 +37,16 @@ pub struct Settings {
     /// before leaving it for the user to retry manually.
     #[serde(default = "default_auto_retry_attempts")]
     pub auto_retry_attempts: u32,
+    /// How often the subscriptions inbox refreshes itself while the app is
+    /// open; 0 turns that off (manual refresh only).
+    #[serde(default = "default_feed_refresh_minutes")]
+    pub feed_refresh_minutes: u32,
+    #[serde(default = "default_true")]
+    pub feed_notifications: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Settings {
@@ -54,6 +68,8 @@ impl Settings {
             locale: "ru".into(),
             network_retries: default_network_retries(),
             auto_retry_attempts: default_auto_retry_attempts(),
+            feed_refresh_minutes: default_feed_refresh_minutes(),
+            feed_notifications: true,
         }
     }
 }

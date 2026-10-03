@@ -11,6 +11,8 @@ const FILENAME_PRESETS = [
   "%(uploader)s/%(title)s.%(ext)s",
 ];
 
+const FEED_REFRESH_OPTIONS = [0, 60, 120, 360, 720, 1440];
+
 const COOKIE_BROWSERS = ["chrome", "safari", "firefox", "edge", "brave"];
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -216,6 +218,30 @@ export function SettingsPanel() {
             </option>
           ))}
         </select>
+      </Field>
+
+      <Field label={t("settings.feedRefresh")} hint={t("settings.feedRefreshHint")}>
+        <select
+          value={settings.feedRefreshMinutes}
+          onChange={(e) => void update({ feedRefreshMinutes: Number(e.target.value) })}
+          className="rounded-lg border px-3 py-2 text-sm outline-none"
+          style={inputStyle()}
+        >
+          {FEED_REFRESH_OPTIONS.map((minutes) => (
+            <option key={minutes} value={minutes}>
+              {minutes === 0 ? t("settings.feedRefreshOff") : t("settings.feedRefreshEvery", { hours: minutes / 60 })}
+            </option>
+          ))}
+        </select>
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings.feedNotifications}
+            onChange={(e) => void update({ feedNotifications: e.target.checked })}
+            className="h-4 w-4 accent-[var(--accent)]"
+          />
+          {t("settings.feedNotifications")}
+        </label>
       </Field>
 
       <Field label={t("settings.theme")}>

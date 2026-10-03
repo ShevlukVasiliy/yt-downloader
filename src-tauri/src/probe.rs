@@ -219,17 +219,10 @@ pub fn friendly_error(stderr: &str) -> String {
     }
 }
 
-#[tauri::command]
-pub async fn analyze_url(app: AppHandle, url: String) -> Result<Analysis, String> {
-    let url = validate_url(&url)?;
-    let bin = resolve(&app, Tool::YtDlp).await?;
-
-    // Analysis hits the exact same YouTube defenses (JS challenge, PO token) as
-    // an actual download, so it needs the same runtime/network flags — a job
-    // that would fail without them would otherwise report a misleadingly
-    // healthy analysis first.
-    let env = crate::runtime::resolve_runtime_env(&app).await;
-    let net = match crate::settings::get_settings(app.clone()).await {
+/// Network flags from the global settings, for requests that aren't tied to a
+/// job's own `DownloadSpec` (analysis, subscription refreshes).
+pub async fn settings_network_opts(app: &AppHandle) -> crate::spec::NetworkOpts {
+    match crate::settings::get_settings(app.clone()).await {
         Ok(s) => crate::spec::NetworkOpts {
             proxy: s.proxy,
             cookies_from_browser: s.cookies_from_browser,
@@ -240,7 +233,35 @@ pub async fn analyze_url(app: AppHandle, url: String) -> Result<Analysis, String
             network_retries: 10,
             ..Default::default()
         },
-    };
+    }
+}
+
+/// Lists that only exist for the signed-in account: Watch Later, Liked
+/// videos, and the `/feed/...` pages.
+pub fn is_private_feed(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else { return false };
+    let list = parsed.query_pairs().find(|(k, _)| k == "list").map(|(_, v)| v.into_owned());
+    matches!(list.as_deref(), Some("WL") | Some("LL")) || parsed.path().starts_with("/feed/")
+}
+
+#[tauri::command]
+pub async fn analyze_url(app: AppHandle, url: String) -> Result<Analysis, String> {
+    let url = validate_url(&url)?;
+    let bin = resolve(&app, Tool::YtDlp).await?;
+
+    // Analysis hits the exact same YouTube defenses (JS challenge, PO token) as
+    // an actual download, so it needs the same runtime/network flags — a job
+    // that would fail without them would otherwise report a misleadingly
+    // healthy analysis first.
+    let env = crate::runtime::resolve_runtime_env(&app).await;
+    let net = settings_network_opts(&app).await;
+    let private = is_private_feed(&url);
+    if private && !net.uses_cookies() {
+        return Err(
+            "«Смотреть позже» и другие личные списки видны только из аккаунта — укажите cookies в настройках"
+                .to_string(),
+        );
+    }
 
     let build_args = |net: &crate::spec::NetworkOpts| {
         let mut args: Vec<String> = vec![
@@ -262,8 +283,11 @@ pub async fn analyze_url(app: AppHandle, url: String) -> Result<Analysis, String
         .await
         .map_err(|e| e.to_string())?;
 
+    // Without cookies a private list is just empty, so retrying without them
+    // can't help.
     if !output.status.success()
         && net.uses_cookies()
+        && !private
         && is_cookie_client_rejection(&String::from_utf8_lossy(&output.stderr))
     {
         let retry = Command::new(&bin)
@@ -280,7 +304,14 @@ pub async fn analyze_url(app: AppHandle, url: String) -> Result<Analysis, String
     }
 
     if !output.status.success() {
-        return Err(friendly_error(&String::from_utf8_lossy(&output.stderr)));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if private && !is_cookie_client_rejection(&stderr) {
+            return Err(format!(
+                "Не удалось открыть личный список — проверьте, что cookies свежие ({})",
+                friendly_error(&stderr)
+            ));
+        }
+        return Err(friendly_error(&stderr));
     }
 
     let raw: RawInfo =
@@ -380,6 +411,15 @@ mod validate_url_tests {
     fn non_redirector_search_link_without_youtube_target_is_rejected() {
         let url = "https://www.google.com/search?q=dying+light";
         assert!(validate_url(url).is_err());
+    }
+
+    #[test]
+    fn watch_later_and_feeds_are_private() {
+        assert!(is_private_feed("https://www.youtube.com/playlist?list=WL"));
+        assert!(is_private_feed("https://www.youtube.com/playlist?list=LL"));
+        assert!(is_private_feed("https://www.youtube.com/feed/subscriptions"));
+        assert!(!is_private_feed("https://www.youtube.com/playlist?list=PLejGw9J2xE9VX0RFX2loRlOzg7fjatGL3"));
+        assert!(!is_private_feed("https://www.youtube.com/watch?v=bFalsqzMyRs"));
     }
 
     #[test]

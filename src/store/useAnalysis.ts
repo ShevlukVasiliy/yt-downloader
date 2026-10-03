@@ -2,6 +2,23 @@ import { create } from "zustand";
 import { api } from "../lib/api";
 import type { Analysis, DownloadSpec } from "../lib/types";
 import { useUrlHistoryStore } from "./useUrlHistory";
+import { useQueueStore } from "./useQueue";
+
+/** Video ids that already have a finished download in the queue/history. */
+export function downloadedIds(): Set<string> {
+  return new Set(
+    useQueueStore
+      .getState()
+      .jobs.filter((j) => j.status === "done")
+      .map((j) => j.videoId),
+  );
+}
+
+function initialSelection(analysis: Analysis): Set<string> {
+  if (analysis.kind !== "playlist") return new Set();
+  const done = downloadedIds();
+  return new Set(analysis.entries.filter((e) => !done.has(e.id)).map((e) => e.id));
+}
 
 function detectDisambiguation(raw: string): { videoUrl: string; playlistUrl: string } | null {
   try {
@@ -68,8 +85,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         url: analysis.webpageUrl,
         analysis,
         loading: false,
-        selectedIds:
-          analysis.kind === "playlist" ? new Set(analysis.entries.map((e) => e.id)) : new Set(),
+        selectedIds: initialSelection(analysis),
         overrides: {},
       });
       useUrlHistoryStore.getState().add(analysis.webpageUrl, analysis);
@@ -85,7 +101,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       loading: false,
       error: null,
       pendingDisambiguation: null,
-      selectedIds: analysis.kind === "playlist" ? new Set(analysis.entries.map((e) => e.id)) : new Set(),
+      selectedIds: initialSelection(analysis),
       overrides: {},
     });
   },

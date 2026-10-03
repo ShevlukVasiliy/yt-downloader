@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, ListChecks, History, Settings as SettingsIcon } from "lucide-react";
+import { Download, ListChecks, History, Rss, Settings as SettingsIcon } from "lucide-react";
 import { DepsGate } from "./components/DepsGate";
 import { UrlBar } from "./components/UrlBar";
 import { AnalysisPanel } from "./components/AnalysisPanel";
@@ -7,21 +7,25 @@ import { PlaylistTable } from "./components/PlaylistTable";
 import { FormatPicker } from "./components/FormatPicker";
 import { QueueList } from "./components/QueueList";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { SubscriptionsPanel } from "./components/SubscriptionsPanel";
 import { ToastHost } from "./components/ToastHost";
 import { useAnalysisStore } from "./store/useAnalysis";
 import { useFormatStore } from "./store/useFormat";
 import { useQueueStore } from "./store/useQueue";
 import { useSettingsStore } from "./store/useSettings";
+import { useNewCount, useSubsStore } from "./store/useSubs";
 import { useT } from "./i18n";
 import { withSettings } from "./lib/defaultSpec";
 import type { DownloadSpec, NewJobRequest } from "./lib/types";
 
-type Tab = "queue" | "history" | "settings";
+type Tab = "queue" | "subs" | "history" | "settings";
 
 function Tabs({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   const t = useT();
-  const items: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  const newCount = useNewCount();
+  const items: { id: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { id: "queue", label: t("queue.title"), icon: <ListChecks size={14} /> },
+    { id: "subs", label: t("subs.title"), icon: <Rss size={14} />, badge: newCount },
     { id: "history", label: t("queue.history"), icon: <History size={14} /> },
     { id: "settings", label: t("queue.settings"), icon: <SettingsIcon size={14} /> },
   ];
@@ -39,6 +43,14 @@ function Tabs({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
         >
           {item.icon}
           {item.label}
+          {item.badge ? (
+            <span
+              className="rounded-full px-1.5 text-[10px] font-semibold leading-4"
+              style={{ background: "var(--accent)", color: "white" }}
+            >
+              {item.badge > 99 ? "99+" : item.badge}
+            </span>
+          ) : null}
         </button>
       ))}
     </div>
@@ -57,7 +69,26 @@ function AppShell() {
   useEffect(() => {
     void useQueueStore.getState().init();
     void useSettingsStore.getState().init();
+    void useSubsStore.getState().init();
   }, []);
+
+  // Background inbox refresh: on start once it's overdue, then every interval.
+  const feedRefreshMinutes = settings?.feedRefreshMinutes ?? 0;
+  useEffect(() => {
+    if (feedRefreshMinutes <= 0) return;
+    const tick = () => {
+      const subs = useSubsStore.getState();
+      if (!subs.loaded || subs.refreshing || subs.channels.length === 0) return;
+      const due = (subs.lastRefresh ?? 0) + feedRefreshMinutes * 60;
+      if (Date.now() / 1000 >= due) void subs.refresh(true);
+    };
+    const first = setTimeout(tick, 5_000);
+    const interval = setInterval(tick, 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
+  }, [feedRefreshMinutes]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -177,6 +208,7 @@ function AppShell() {
           <Tabs tab={tab} setTab={setTab} />
           <div className="flex-1 overflow-y-auto p-4">
             {tab === "queue" && <QueueList mode="active" />}
+            {tab === "subs" && <SubscriptionsPanel />}
             {tab === "history" && <QueueList mode="history" />}
             {tab === "settings" && <SettingsPanel />}
           </div>

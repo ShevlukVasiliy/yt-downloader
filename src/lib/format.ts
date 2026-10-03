@@ -32,6 +32,17 @@ export function formatPercent(downloaded: number | null, total: number | null): 
   return Math.min(100, Math.round((downloaded / total) * 1000) / 10);
 }
 
+/** "3 h ago" for a unix-seconds timestamp. */
+export function formatAgo(unixSeconds: number, locale: string): string {
+  const diff = unixSeconds - Date.now() / 1000;
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+  const abs = Math.abs(diff);
+  if (abs < 3600) return rtf.format(Math.round(diff / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(diff / 3600), "hour");
+  if (abs < 86400 * 30) return rtf.format(Math.round(diff / 86400), "day");
+  return rtf.format(Math.round(diff / (86400 * 30)), "month");
+}
+
 export function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max - 1)}…`;

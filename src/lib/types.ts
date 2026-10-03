@@ -152,4 +152,45 @@ export interface Settings {
   locale: Locale;
   networkRetries: number;
   autoRetryAttempts: number;
+  feedRefreshMinutes: number;
+  feedNotifications: boolean;
+}
+
+// Mirrors src-tauri/src/subs.rs.
+export type AutoDownload = "video" | "audio";
+export type ItemState = "new" | "seen" | "queued";
+
+export interface Channel {
+  id: string;
+  title: string;
+  thumbnail: string | null;
+  enabled: boolean;
+  autoDownload: AutoDownload | null;
+  addedAt: number;
+  lastChecked: number | null;
+  lastError: string | null;
+}
+
+export interface FeedItem {
+  videoId: string;
+  channelId: string;
+  channelTitle: string;
+  title: string;
+  thumbnail: string | null;
+  duration: number | null;
+  published: number | null;
+  url: string;
+  state: ItemState;
+  firstSeen: number;
+}
+
+export interface SubsState {
+  channels: Channel[];
+  items: FeedItem[];
+  lastRefresh: number | null;
+}
+
+export interface RefreshResult {
+  newItems: FeedItem[];
+  failedChannels: number;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Loader2, Clipboard, X, ListVideo, Video } from "lucide-react";
+import { Search, Loader2, Clipboard, X, ListVideo, Video, Clock } from "lucide-react";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAnalysisStore } from "../store/useAnalysis";
 import { useUrlHistoryStore } from "../store/useUrlHistory";
@@ -13,6 +13,8 @@ function looksLikeYoutubeUrl(text: string | null | undefined): text is string {
     (trimmed.includes("youtube.com") || trimmed.includes("youtu.be"))
   );
 }
+
+const WATCH_LATER_URL = "https://www.youtube.com/playlist?list=WL";
 
 export function UrlBar() {
   const t = useT();
@@ -149,6 +151,22 @@ export function UrlBar() {
           </div>
         )}
       </form>
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          onClick={() => {
+            setUrl(WATCH_LATER_URL);
+            submit(WATCH_LATER_URL);
+          }}
+          disabled={loading}
+          className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:border-[var(--accent)] disabled:opacity-50"
+          style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+          title={t("urlbar.watchLaterHint")}
+        >
+          <Clock size={12} />
+          {t("urlbar.watchLater")}
+        </button>
+      </div>
 
       {clipboardSuggestion && !loading && (
         <button

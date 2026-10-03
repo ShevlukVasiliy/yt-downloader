@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Settings2, X } from "lucide-react";
 import { useAnalysisStore } from "../store/useAnalysis";
+import { useQueueStore } from "../store/useQueue";
 import { useFormatStore } from "../store/useFormat";
 import { useT } from "../i18n";
 import { formatDuration, truncate } from "../lib/format";
@@ -13,6 +14,11 @@ export function PlaylistTable() {
   const { analysis, selectedIds, overrides, toggleSelected, selectAll, deselectAll, invertSelection, selectRange, setOverride } =
     useAnalysisStore();
   const commonSpec = useFormatStore((s) => s.spec);
+  const jobs = useQueueStore((s) => s.jobs);
+  const downloaded = useMemo(
+    () => new Set(jobs.filter((j) => j.status === "done").map((j) => j.videoId)),
+    [jobs],
+  );
   const [search, setSearch] = useState("");
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
@@ -132,6 +138,14 @@ export function PlaylistTable() {
                       {entry.index}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{truncate(entry.title, 90)}</span>
+                    {downloaded.has(entry.id) && (
+                      <span
+                        className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                        style={{ background: "var(--bg-elevated-2)", color: "var(--success)" }}
+                      >
+                        {t("playlist.downloadedBadge")}
+                      </span>
+                    )}
                     {hasOverride && (
                       <span
                         className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
