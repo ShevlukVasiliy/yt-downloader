@@ -304,7 +304,12 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
             match files.into_iter().next() {
                 Some(first) => finalize(&app, &job_id, JobStatus::Done, Some(first), None, None).await,
                 None => {
-                    finalize_error(&app, &job_id, "У этого видео нет субтитров на выбранных языках".into(), None).await
+                    let message = if spec.extras.subtitles.auto {
+                        "У этого видео нет субтитров на выбранных языках"
+                    } else {
+                        "Обычных субтитров нет — включите «Автоматические субтитры» и повторите"
+                    };
+                    finalize_error(&app, &job_id, message.into(), None).await
                 }
             }
         }

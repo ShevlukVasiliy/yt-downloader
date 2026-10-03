@@ -15,7 +15,7 @@ export function createDefaultSpec(): DownloadSpec {
       embedChapters: false,
       sponsorblock: false,
       writeInfoJson: false,
-      subtitles: { enabled: false, langs: ["ru", "en"], auto: false, embed: false },
+      subtitles: { enabled: false, langs: ["ru", "en"], auto: true, embed: false },
     },
     outputDir: "",
     filenameTemplate: "%(title)s.%(ext)s",
