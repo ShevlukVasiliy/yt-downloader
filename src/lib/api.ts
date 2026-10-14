@@ -5,6 +5,7 @@ import type {
   AutoDownload,
   Channel,
   DepsStatus,
+  DiskFullEvent,
   ItemState,
   Job,
   JobProgress,
@@ -26,6 +27,7 @@ export const api = {
   pauseJob: (id: string) => invoke<void>("pause_job", { id }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   retryJob: (id: string) => invoke<void>("retry_job", { id }),
+  resumeAfterDiskFull: () => invoke<void>("resume_after_disk_full"),
   removeJob: (id: string) => invoke<void>("remove_job", { id }),
   setConcurrency: (value: number) => invoke<void>("set_concurrency", { value }),
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
@@ -62,6 +64,10 @@ export interface JobProgressEvent {
 
 export function onJobProgress(handler: (event: JobProgressEvent) => void) {
   return listen<JobProgressEvent>("job://progress", (e) => handler(e.payload));
+}
+
+export function onDiskFull(handler: (event: DiskFullEvent) => void) {
+  return listen<DiskFullEvent>("job://disk-full", (e) => handler(e.payload));
 }
 
 export function onJobList(handler: (jobs: Job[]) => void) {

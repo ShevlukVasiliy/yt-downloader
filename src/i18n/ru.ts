@@ -180,6 +180,15 @@ export const ru = {
   "settings.feedRefreshEvery": "Каждые {{hours}} ч",
   "settings.feedNotifications": "Уведомлять о новых видео",
 
+  "queue.part": "Поток {{part}} из {{parts}}",
+  "diskFull.title": "Место на диске закончилось",
+  "diskFull.body": "Загрузки остановлены, чтобы не заполнять диск дальше. Освободите место и нажмите «Повторить» — остановленные загрузки продолжатся.",
+  "diskFull.folder": "Папка",
+  "diskFull.free": "Свободно",
+  "diskFull.needed": "Нужно примерно",
+  "diskFull.openFolder": "Открыть папку",
+  "diskFull.retry": "Повторить",
+
   "common.cancel": "Отмена",
   "common.close": "Закрыть",
   "common.back": "Назад",

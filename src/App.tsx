@@ -9,6 +9,7 @@ import { QueueList } from "./components/QueueList";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SubscriptionsPanel } from "./components/SubscriptionsPanel";
 import { ToastHost } from "./components/ToastHost";
+import { DiskFullDialog } from "./components/DiskFullDialog";
 import { useAnalysisStore } from "./store/useAnalysis";
 import { useFormatStore } from "./store/useFormat";
 import { useQueueStore } from "./store/useQueue";
@@ -216,6 +217,7 @@ function AppShell() {
       </div>
 
       <ToastHost />
+      <DiskFullDialog />
     </div>
   );
 }

@@ -1,11 +1,11 @@
 use crate::bin::{resolve, Tool};
-use crate::probe::{friendly_error, is_cookie_client_rejection};
+use crate::probe::{friendly_error, is_cookie_client_rejection, is_permanent_failure, DISK_FULL_MESSAGE};
 use crate::queue::{update_progress, JobProgress, JobStatus, KillReason, QueueManager};
 use crate::runtime::resolve_runtime_env;
 use crate::spec::{to_argv, Mode, SubtitleFormat};
 use std::path::Path;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
@@ -38,6 +38,7 @@ fn handle_download_line(line: &str, current_filename: &mut Option<String>) -> Op
         total_bytes,
         speed_bytes_per_sec,
         eta_seconds,
+        ..Default::default()
     })
 }
 
@@ -131,8 +132,40 @@ fn srt_to_text(srt: &str) -> String {
     text
 }
 
+/// Below this much free space a download isn't even started.
+const MIN_FREE_BYTES: u64 = 200 * 1024 * 1024;
+/// Head-room kept on top of the estimate when checking a stream's size.
+const FREE_MARGIN_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Free bytes on the volume holding `dir` — walks up to the nearest existing
+/// ancestor since yt-dlp creates the folder (e.g. a playlist subfolder) itself.
+pub fn free_space(dir: &str) -> Option<u64> {
+    Path::new(dir)
+        .ancestors()
+        .find(|p| p.exists())
+        .and_then(|p| fs4::available_space(p).ok())
+}
+
+/// Space a stream still needs: what's left to download, plus a full copy of
+/// it when ffmpeg will later merge the streams into a new file next to them.
+fn space_needed(progress: &JobProgress, merges: bool) -> Option<u64> {
+    let total = progress.total_bytes?;
+    let remaining = total.saturating_sub(progress.downloaded_bytes.unwrap_or(0));
+    Some(remaining + if merges { total } else { 0 })
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskFullEvent {
+    dir: String,
+    free_bytes: Option<u64>,
+    needed_bytes: Option<u64>,
+}
+
 enum Attempt {
     Done,
+    /// Stopped before it filled the disk: `needed` bytes wouldn't fit.
+    NoSpace(u64),
     Killed(KillReason),
     /// Joined tail of yt-dlp's stderr.
     Failed(String),
@@ -150,6 +183,7 @@ async fn attempt(
     kill_rx: &mut mpsc::Receiver<KillReason>,
     current_filename: &mut Option<String>,
     subtitle_files: &mut Vec<String>,
+    space_check: Option<(&str, bool)>,
 ) -> Attempt {
     let mut child = match Command::new(ytdlp)
         .args(argv)
@@ -180,6 +214,12 @@ async fn attempt(
 
     let mut stdout_lines = BufReader::new(stdout).lines();
     let mut kill_reason: Option<KillReason> = None;
+    let mut no_space: Option<u64> = None;
+    // Each stream (video, then audio) is checked once, as soon as yt-dlp
+    // reports its size.
+    let mut checked_stream: Option<String> = None;
+    let mut streams_seen: Vec<String> = Vec::new();
+    let merges = space_check.is_some_and(|(_, m)| m);
 
     loop {
         tokio::select! {
@@ -188,7 +228,30 @@ async fn attempt(
                     Ok(Some(l)) => {
                         if let Some(path) = l.strip_prefix(SUBTITLE_LINE) {
                             subtitle_files.push(path.trim().to_string());
-                        } else if let Some(progress) = handle_download_line(&l, current_filename) {
+                        } else if let Some(mut progress) = handle_download_line(&l, current_filename) {
+                            if let Some(f) = current_filename.as_ref() {
+                                if !streams_seen.contains(f) {
+                                    streams_seen.push(f.clone());
+                                }
+                            }
+                            if merges {
+                                let part = streams_seen.len().max(1) as u32;
+                                progress.part = Some(part);
+                                progress.parts = Some(part.max(2));
+                            }
+                            if let Some((dir, merges)) = space_check {
+                                if progress.total_bytes.is_some() && checked_stream != *current_filename {
+                                    checked_stream = current_filename.clone();
+                                    let needed = space_needed(&progress, merges);
+                                    if let (Some(needed), Some(free)) = (needed, free_space(dir)) {
+                                        if free < needed + FREE_MARGIN_BYTES {
+                                            let _ = child.start_kill();
+                                            no_space = Some(needed);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                             update_progress(app, job_id, progress, JobStatus::Downloading).await;
                         } else if let Some(status) = handle_postprocess_line(&l, current_filename) {
                             update_progress(app, job_id, JobProgress::default(), status).await;
@@ -212,6 +275,9 @@ async fn attempt(
 
     if let Some(r) = kill_reason {
         return Attempt::Killed(r);
+    }
+    if let Some(needed) = no_space {
+        return Attempt::NoSpace(needed);
     }
     match exit_status {
         Ok(status) if status.success() => Attempt::Done,
@@ -246,6 +312,17 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
         }
     };
 
+    let space_check = (spec.mode != Mode::Subtitles)
+        .then(|| (spec.output_dir.as_str(), spec.mode == Mode::Video && !spec.video_only));
+    if space_check.is_some() {
+        if let Some(free) = free_space(&spec.output_dir) {
+            if free < MIN_FREE_BYTES {
+                fail_disk_full(&app, &job_id, &spec.output_dir, None, None).await;
+                return;
+            }
+        }
+    }
+
     let env = resolve_runtime_env(&app).await;
     let mut current_filename: Option<String> = None;
     let mut subtitle_files: Vec<String> = Vec::new();
@@ -258,6 +335,7 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
         &mut kill_rx,
         &mut current_filename,
         &mut subtitle_files,
+        space_check,
     )
     .await;
 
@@ -273,6 +351,7 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
                 &mut kill_rx,
                 &mut current_filename,
                 &mut subtitle_files,
+                space_check,
             )
             .await;
             outcome = match retry {
@@ -316,8 +395,17 @@ pub async fn run(app: AppHandle, job_id: String, mut kill_rx: mpsc::Receiver<Kil
         Attempt::Done => {
             finalize(&app, &job_id, JobStatus::Done, current_filename, None, None).await;
         }
+        Attempt::NoSpace(needed) => {
+            fail_disk_full(&app, &job_id, &spec.output_dir, Some(needed), None).await;
+        }
         Attempt::SpawnFailed(message) => {
             finalize_error(&app, &job_id, message, None).await;
+        }
+        Attempt::Failed(stderr) if crate::probe::is_disk_full(&stderr) => {
+            // The half-written file only takes up the space the user is
+            // about to free; a retry starts it over anyway.
+            cleanup_partial(&current_filename).await;
+            fail_disk_full(&app, &job_id, &spec.output_dir, None, Some(stderr)).await;
         }
         Attempt::Failed(stderr) => {
             let message = friendly_error(&stderr);
@@ -347,7 +435,36 @@ async fn finalize(
 }
 
 async fn finalize_error(app: &AppHandle, job_id: &str, message: String, detail: Option<String>) {
+    let kind = detail.as_deref().filter(|d| is_permanent_failure(d)).map(|_| "permanent");
     finalize(app, job_id, JobStatus::Error, None, Some(message), detail).await;
+    set_error_kind(app, job_id, kind).await;
+}
+
+async fn set_error_kind(app: &AppHandle, job_id: &str, kind: Option<&str>) {
+    let qm = app.state::<QueueManager>();
+    let mut jobs = qm.jobs.lock().await;
+    if let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) {
+        job.error_kind = kind.map(str::to_string);
+    }
+}
+
+/// Fails the job as "disk full" and tells the UI to show the free-up-space
+/// dialog. `needed` is set when the check caught it before the disk filled.
+async fn fail_disk_full(app: &AppHandle, job_id: &str, dir: &str, needed: Option<u64>, detail: Option<String>) {
+    let free = free_space(dir);
+    let detail = detail.or_else(|| {
+        Some(format!(
+            "Папка: {dir}\nСвободно: {} МБ{}",
+            free.map(|f| f / 1024 / 1024).unwrap_or(0),
+            needed.map(|n| format!("\nНужно: ~{} МБ", n / 1024 / 1024)).unwrap_or_default()
+        ))
+    });
+    finalize(app, job_id, JobStatus::Error, None, Some(DISK_FULL_MESSAGE.into()), detail).await;
+    set_error_kind(app, job_id, Some("diskFull")).await;
+    let _ = app.emit(
+        "job://disk-full",
+        DiskFullEvent { dir: dir.to_string(), free_bytes: free, needed_bytes: needed },
+    );
 }
 
 /// Divides a total bandwidth budget evenly across concurrent download slots.
@@ -390,6 +507,25 @@ mod subtitle_tests {
         );
         assert_eq!(tokio::fs::read_to_string(dir.join("v.en.txt")).await.unwrap(), "hi\n");
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+}
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    #[test]
+    fn merge_needs_room_for_the_merged_copy() {
+        let p = JobProgress { downloaded_bytes: Some(100), total_bytes: Some(1000), ..Default::default() };
+        assert_eq!(space_needed(&p, false), Some(900));
+        assert_eq!(space_needed(&p, true), Some(1900));
+        assert_eq!(space_needed(&JobProgress::default(), true), None);
+    }
+
+    #[test]
+    fn free_space_resolves_missing_subfolder() {
+        let dir = std::env::temp_dir().join("no-such-dir-yet/nested");
+        assert!(free_space(dir.to_str().unwrap()).is_some());
     }
 }
 

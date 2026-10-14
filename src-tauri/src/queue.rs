@@ -32,6 +32,12 @@ pub struct JobProgress {
     pub total_bytes: Option<u64>,
     pub speed_bytes_per_sec: Option<f64>,
     pub eta_seconds: Option<u64>,
+    /// Which stream is downloading (1-based) out of `parts` — a video+audio
+    /// download runs two progress bars back to back before merging.
+    #[serde(default)]
+    pub part: Option<u32>,
+    #[serde(default)]
+    pub parts: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -56,6 +62,14 @@ pub struct Job {
     pub created_at: String,
     #[serde(default)]
     pub retries_left: u32,
+    /// Machine-readable error class: `diskFull` drives the "free up space"
+    /// dialog, `permanent` (and `diskFull`) skip the auto-retry.
+    #[serde(default)]
+    pub error_kind: Option<String>,
+    /// Paused by the queue itself because the disk filled up (not by the
+    /// user), so "retry" in the disk-full dialog knows what to resume.
+    #[serde(default)]
+    pub paused_for_disk: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -204,8 +218,23 @@ async fn try_schedule_inner(app: AppHandle) {
                     let should_auto_retry = {
                         let qm = app2.state::<QueueManager>();
                         let mut jobs = qm.jobs.lock().await;
+                        let disk_full = jobs
+                            .iter()
+                            .any(|j| j.id == id && j.status == JobStatus::Error && j.error_kind.as_deref() == Some("diskFull"));
+                        if disk_full {
+                            // Everything still waiting would fail the same way —
+                            // hold it until the user frees up space.
+                            for job in jobs.iter_mut().filter(|j| j.status == JobStatus::Queued) {
+                                job.status = JobStatus::Paused;
+                                job.paused_for_disk = true;
+                            }
+                        }
                         match jobs.iter_mut().find(|j| j.id == id) {
-                            Some(job) if job.status == JobStatus::Error && job.retries_left > 0 => {
+                            Some(job)
+                                if job.status == JobStatus::Error
+                                    && job.retries_left > 0
+                                    && job.error_kind.is_none() =>
+                            {
                                 job.retries_left -= 1;
                                 job.status = JobStatus::Queued;
                                 job.progress = JobProgress::default();
@@ -278,6 +307,8 @@ pub async fn enqueue_jobs(app: AppHandle, requests: Vec<NewJobRequest>) -> Resul
                 output_path: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 retries_left: auto_retry_attempts,
+                error_kind: None,
+                paused_for_disk: false,
             };
             created.push(job.clone());
             jobs.push(job);
@@ -337,12 +368,35 @@ pub async fn retry_job(app: AppHandle, id: String) -> Result<(), String> {
             job.progress = JobProgress::default();
             job.error = None;
             job.error_detail = None;
+            job.error_kind = None;
+            job.paused_for_disk = false;
             job.retries_left = auto_retry_attempts;
         }
     }
     persist(&app).await;
     emit_list(&app).await;
     tauri::async_runtime::spawn(try_schedule(app.clone()));
+    Ok(())
+}
+
+/// "Retry" in the disk-full dialog: requeues every job that failed on the
+/// full disk plus those the queue paused because of it.
+#[tauri::command]
+pub async fn resume_after_disk_full(app: AppHandle) -> Result<(), String> {
+    let ids: Vec<String> = {
+        let qm = app.state::<QueueManager>();
+        let jobs = qm.jobs.lock().await;
+        jobs.iter()
+            .filter(|j| {
+                (j.status == JobStatus::Error && j.error_kind.as_deref() == Some("diskFull"))
+                    || (j.status == JobStatus::Paused && j.paused_for_disk)
+            })
+            .map(|j| j.id.clone())
+            .collect()
+    };
+    for id in ids {
+        retry_job(app.clone(), id).await?;
+    }
     Ok(())
 }
 

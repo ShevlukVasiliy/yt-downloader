@@ -94,6 +94,9 @@ export function JobCard({ job }: { job: Job }) {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
           {job.status === "downloading" && (
             <>
+              {job.progress.part && job.progress.parts && (
+                <span>{t("queue.part", { part: job.progress.part, parts: job.progress.parts })}</span>
+              )}
               {percent != null && <span>{percent}%</span>}
               <span>
                 {formatBytes(job.progress.downloadedBytes)}

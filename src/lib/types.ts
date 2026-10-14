@@ -92,6 +92,8 @@ export interface JobProgress {
   totalBytes: number | null;
   speedBytesPerSec: number | null;
   etaSeconds: number | null;
+  part?: number | null;
+  parts?: number | null;
 }
 
 export interface Job {
@@ -110,6 +112,14 @@ export interface Job {
   outputPath: string | null;
   createdAt: string;
   retriesLeft: number;
+  errorKind?: "diskFull" | "permanent" | null;
+  pausedForDisk?: boolean;
+}
+
+export interface DiskFullEvent {
+  dir: string;
+  freeBytes: number | null;
+  neededBytes: number | null;
 }
 
 export interface NewJobRequest {

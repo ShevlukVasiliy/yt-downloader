@@ -182,6 +182,15 @@ export const en: Record<TranslationKey, string> = {
   "settings.feedRefreshEvery": "Every {{hours}} h",
   "settings.feedNotifications": "Notify about new videos",
 
+  "queue.part": "Stream {{part}} of {{parts}}",
+  "diskFull.title": "Out of disk space",
+  "diskFull.body": "Downloads were stopped so the disk doesn't fill up further. Free up some space and press “Retry” — the stopped downloads will continue.",
+  "diskFull.folder": "Folder",
+  "diskFull.free": "Free",
+  "diskFull.needed": "Needed, approx.",
+  "diskFull.openFolder": "Open folder",
+  "diskFull.retry": "Retry",
+
   "common.cancel": "Cancel",
   "common.close": "Close",
   "common.back": "Back",

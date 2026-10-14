@@ -42,6 +42,7 @@ pub fn run() {
             queue::pause_job,
             queue::cancel_job,
             queue::retry_job,
+            queue::resume_after_disk_full,
             queue::remove_job,
             queue::set_concurrency,
             queue::reveal_in_folder,

@@ -1,12 +1,16 @@
 import { create } from "zustand";
-import { api, onJobList, onJobProgress } from "../lib/api";
-import type { Job, NewJobRequest } from "../lib/types";
+import { api, onDiskFull, onJobList, onJobProgress } from "../lib/api";
+import type { DiskFullEvent, Job, NewJobRequest } from "../lib/types";
 import { useToastStore } from "./useToast";
 import { translate, useLocaleStore } from "../i18n";
 
 interface QueueState {
   jobs: Job[];
   initialized: boolean;
+  /** Set when a download ran out of disk space — drives the dialog. */
+  diskFull: DiskFullEvent | null;
+  dismissDiskFull: () => void;
+  resumeAfterDiskFull: () => Promise<void>;
   init: () => Promise<void>;
   enqueue: (requests: NewJobRequest[]) => Promise<void>;
   pause: (id: string) => Promise<void>;
@@ -21,6 +25,12 @@ let unlisten: (() => void)[] = [];
 export const useQueueStore = create<QueueState>((set, get) => ({
   jobs: [],
   initialized: false,
+  diskFull: null,
+  dismissDiskFull: () => set({ diskFull: null }),
+  resumeAfterDiskFull: async () => {
+    set({ diskFull: null });
+    await api.resumeAfterDiskFull();
+  },
 
   init: async () => {
     if (get().initialized) return;
@@ -47,7 +57,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         jobs: s.jobs.map((j) => (j.id === id ? { ...j, status, progress } : j)),
       }));
     });
-    unlisten.push(offList, offProgress);
+    // Several parallel downloads hit a full disk at once — keep one dialog,
+    // with the most informative numbers.
+    const offDiskFull = await onDiskFull((event) => {
+      set((s) => ({ diskFull: s.diskFull && !event.neededBytes ? { ...event, neededBytes: s.diskFull.neededBytes } : event }));
+    });
+    unlisten.push(offList, offProgress, offDiskFull);
   },
 
   enqueue: async (requests) => {

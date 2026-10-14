@@ -179,9 +179,42 @@ pub fn is_cookie_client_rejection(stderr: &str) -> bool {
     stderr.to_lowercase().contains("the page needs to be reloaded")
 }
 
+/// The disk (or quota) behind the download folder ran out mid-write — yt-dlp
+/// and ffmpeg report it in several OS-specific ways.
+pub fn is_disk_full(stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    [
+        "errno 28",
+        "no space left on device",
+        "enospc",
+        "not enough space on the disk",
+        "disk quota exceeded",
+        "errno 122",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+/// Failures another attempt can't fix, so the auto-retry shouldn't burn
+/// through them (and re-download a file that will fail the same way).
+pub fn is_permanent_failure(stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    is_disk_full(stderr)
+        || lower.contains("private video")
+        || lower.contains("video unavailable")
+        || lower.contains("permission denied")
+        || lower.contains("read-only file system")
+}
+
+pub const DISK_FULL_MESSAGE: &str = "Закончилось место на диске — освободите место и повторите загрузку";
+
 pub fn friendly_error(stderr: &str) -> String {
     let lower = stderr.to_lowercase();
-    if is_cookie_client_rejection(stderr) {
+    if is_disk_full(stderr) {
+        DISK_FULL_MESSAGE.to_string()
+    } else if lower.contains("permission denied") || lower.contains("read-only file system") {
+        "Нет прав на запись в папку загрузки — выберите другую папку в настройках".to_string()
+    } else if is_cookie_client_rejection(stderr) {
         // Only reaches the user once the automatic no-cookies retry failed too,
         // i.e. the video really needs the account — the fix has to come from
         // yt-dlp's side.
@@ -487,5 +520,31 @@ mod friendly_error_tests {
     fn plain_403_forbidden_gets_actionable_hint() {
         let msg = friendly_error("ERROR: unable to download video data: HTTP Error 403: Forbidden");
         assert!(msg.contains("403"), "got: {msg}");
+    }
+}
+
+#[cfg(test)]
+mod disk_full_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_disk_full_variants() {
+        for e in [
+            "ERROR: unable to write data: [Errno 28] No space left on device",
+            "av_interleaved_write_frame(): No space left on device",
+            "OSError: [WinError 112] There is not enough space on the disk",
+            "[Errno 122] Disk quota exceeded",
+        ] {
+            assert!(is_disk_full(e), "{e}");
+            assert_eq!(friendly_error(e), DISK_FULL_MESSAGE);
+            assert!(is_permanent_failure(e));
+        }
+    }
+
+    #[test]
+    fn network_errors_stay_retryable() {
+        let e = "ERROR: Unable to download webpage: <urlopen error timed out>";
+        assert!(!is_disk_full(e));
+        assert!(!is_permanent_failure(e));
     }
 }
