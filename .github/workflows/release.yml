@@ -48,8 +48,11 @@ jobs:
           cd src-tauri/binaries
 
           curl -fL --retry 3 -o yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
-          curl -fL --retry 3 -o ffmpeg.zip "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
-          curl -fL --retry 3 -o ffprobe.zip "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"
+          # Native arm64 static build, pinned: evermeet.cx removed its
+          # "latest" endpoint (HTTP 410) in Oct 2026.
+          FFMPEG_BASE=https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2
+          curl -fL --retry 3 -o ffmpeg.zip "$FFMPEG_BASE/ffmpeg.zip"
+          curl -fL --retry 3 -o ffprobe.zip "$FFMPEG_BASE/ffprobe.zip"
           unzip -o ffmpeg.zip -x '*.txt' -d .
           unzip -o ffprobe.zip -x '*.txt' -d .
           rm -f ffmpeg.zip ffprobe.zip
