@@ -1,7 +1,7 @@
 export const ru = {
   "app.title": "YT Downloader",
 
-  "urlbar.placeholder": "Вставьте ссылку на видео, музыку или плейлист YouTube",
+  "urlbar.placeholder": "Вставьте одну или несколько ссылок YouTube",
   "urlbar.placeholderWithHistory": "Вставьте ссылку или ↑↓ — недавние",
   "urlbar.analyze": "Анализировать",
   "urlbar.analyzing": "Получаем информацию…",
@@ -9,6 +9,7 @@ export const ru = {
   "urlbar.pasteButton": "Вставить",
   "urlbar.errorInvalid": "Это не похоже на ссылку",
   "urlbar.errorNotYoutube": "Поддерживаются только ссылки YouTube",
+  "urlbar.batchTitle": "Несколько ссылок ({{count}})",
   "urlbar.dropHint": "Отпустите, чтобы вставить ссылку",
 
   "disambiguate.title": "В ссылке есть и видео, и плейлист",

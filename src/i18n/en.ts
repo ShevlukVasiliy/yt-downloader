@@ -3,7 +3,7 @@ import type { TranslationKey } from "./ru";
 export const en: Record<TranslationKey, string> = {
   "app.title": "YT Downloader",
 
-  "urlbar.placeholder": "Paste a YouTube video, music, or playlist link",
+  "urlbar.placeholder": "Paste one or more YouTube links",
   "urlbar.placeholderWithHistory": "Paste a link or ↑↓ for recent ones",
   "urlbar.analyze": "Analyze",
   "urlbar.analyzing": "Fetching info…",
@@ -11,6 +11,7 @@ export const en: Record<TranslationKey, string> = {
   "urlbar.pasteButton": "Paste",
   "urlbar.errorInvalid": "That doesn't look like a link",
   "urlbar.errorNotYoutube": "Only YouTube links are supported",
+  "urlbar.batchTitle": "Multiple links ({{count}})",
   "urlbar.dropHint": "Drop to paste the link",
 
   "disambiguate.title": "This link has both a video and a playlist",

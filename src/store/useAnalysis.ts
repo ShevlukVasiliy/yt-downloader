@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { api } from "../lib/api";
-import type { Analysis, DownloadSpec } from "../lib/types";
+import type { Analysis, DownloadSpec, PlaylistEntry, PlaylistInfo } from "../lib/types";
 import { useUrlHistoryStore } from "./useUrlHistory";
 import { useQueueStore } from "./useQueue";
+import { translate, useLocaleStore } from "../i18n";
 
 /** Video ids that already have a finished download in the queue/history. */
 export function downloadedIds(): Set<string> {
@@ -36,6 +37,50 @@ function detectDisambiguation(raw: string): { videoUrl: string; playlistUrl: str
     // not URL-parseable; let the backend produce a friendly validation error
   }
   return null;
+}
+
+/** All http(s) links in the text — handles newline/space/comma separated and glued-together links. */
+export function extractUrls(text: string): string[] {
+  const found = text.match(/https?:\/\/.+?(?=https?:\/\/|[\s,;]|$)/g) ?? [];
+  return [...new Set(found)];
+}
+
+/** Analyzes each link and merges videos + playlist entries into one synthetic playlist. */
+async function analyzeMany(urls: string[]): Promise<{ analysis: PlaylistInfo | null; failed: string[] }> {
+  const results = await Promise.allSettled(urls.map((u) => api.analyzeUrl(u)));
+  const entries: PlaylistEntry[] = [];
+  const seen = new Set<string>();
+  const failed: string[] = [];
+  const push = (e: Omit<PlaylistEntry, "index">) => {
+    if (seen.has(e.id)) return;
+    seen.add(e.id);
+    entries.push({ ...e, index: entries.length + 1 });
+  };
+  results.forEach((r, i) => {
+    if (r.status === "rejected") {
+      failed.push(`${urls[i]}: ${String(r.reason)}`);
+      return;
+    }
+    const a = r.value;
+    if (a.kind === "video") {
+      push({ id: a.id, title: a.title, duration: a.duration, thumbnail: a.thumbnail, uploader: a.uploader, webpageUrl: a.webpageUrl });
+    } else {
+      a.entries.forEach(push);
+    }
+  });
+  if (entries.length === 0) return { analysis: null, failed };
+  return {
+    analysis: {
+      kind: "playlist",
+      id: `batch-${Date.now()}`,
+      title: translate(useLocaleStore.getState().locale, "urlbar.batchTitle", { count: urls.length - failed.length }),
+      uploader: null,
+      thumbnail: entries[0].thumbnail,
+      webpageUrl: urls.join(" "),
+      entries,
+    },
+    failed,
+  };
 }
 
 interface AnalysisState {
@@ -73,6 +118,17 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setUrl: (url) => set({ url }),
 
   analyze: async (rawUrl) => {
+    const urls = extractUrls(rawUrl);
+    if (urls.length > 1) {
+      set({ loading: true, error: null, pendingDisambiguation: null });
+      const { analysis, failed } = await analyzeMany(urls);
+      set({
+        loading: false,
+        error: failed.length ? failed.join("\n") : null,
+        ...(analysis ? { analysis, selectedIds: initialSelection(analysis), overrides: {} } : {}),
+      });
+      return;
+    }
     const disambiguation = detectDisambiguation(rawUrl);
     if (disambiguation) {
       set({ pendingDisambiguation: disambiguation, error: null });

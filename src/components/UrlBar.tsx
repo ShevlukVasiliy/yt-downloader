@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Search, Loader2, Clipboard, X, ListVideo, Video, Clock } from "lucide-react";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
-import { useAnalysisStore } from "../store/useAnalysis";
+import { extractUrls, useAnalysisStore } from "../store/useAnalysis";
 import { useUrlHistoryStore } from "../store/useUrlHistory";
 import { useT } from "../i18n";
 
@@ -118,6 +118,14 @@ export function UrlBar() {
             if (historyIndex !== -1) setHistoryIndex(-1);
           }}
           onKeyDown={handleKeyDown}
+          onPaste={(e) => {
+            // <input> drops newlines, gluing multi-line pastes together — keep links apart
+            const urls = extractUrls(e.clipboardData.getData("text/plain"));
+            if (urls.length > 1) {
+              e.preventDefault();
+              setUrl(urls.join(" "));
+            }
+          }}
           placeholder={historyEntries.length > 0 ? t("urlbar.placeholderWithHistory") : t("urlbar.placeholder")}
           className="no-drag min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:opacity-60"
           style={{ color: "var(--text)" }}
