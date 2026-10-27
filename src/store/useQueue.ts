@@ -41,7 +41,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const offList = await onJobList((nextJobs) => {
       const previous = new Map(get().jobs.map((j) => [j.id, j.status]));
       for (const job of nextJobs) {
-        if (job.status === "done" && previous.get(job.id) !== "done" && job.outputPath) {
+        // Unknown ids are jobs we just dropped locally (clearFinished/remove) and the
+        // backend hasn't caught up yet — not fresh completions.
+        const prev = previous.get(job.id);
+        if (job.status === "done" && prev !== undefined && prev !== "done" && job.outputPath) {
           const locale = useLocaleStore.getState().locale;
           useToastStore.getState().push({
             message: `${translate(locale, "queue.status.done")}: ${job.title}`,
